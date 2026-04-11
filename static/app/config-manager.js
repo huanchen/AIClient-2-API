@@ -7,6 +7,436 @@ import { t } from './i18n.js';
 
 // 提供商配置缓存
 let currentProviderConfigs = null;
+let defaultClientModelRoutingRules = {};
+let clientModelRoutingPreviewState = {
+    effectiveRules: null,
+    invalid: false
+};
+let clientModelRoutingLanguageListenerBound = false;
+
+function escapeHtml(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cloneRuleValue(value) {
+    if (Array.isArray(value)) {
+        return value.map(item => cloneRuleValue(item));
+    }
+
+    if (isPlainObject(value)) {
+        return Object.entries(value).reduce((result, [key, nestedValue]) => {
+            result[key] = cloneRuleValue(nestedValue);
+            return result;
+        }, {});
+    }
+
+    return value;
+}
+
+function mergeClientModelRoutingRules(baseRules, overrideRules) {
+    if (!isPlainObject(overrideRules)) {
+        return cloneRuleValue(baseRules);
+    }
+
+    const mergedRules = cloneRuleValue(baseRules);
+    Object.entries(overrideRules).forEach(([key, value]) => {
+        if (Array.isArray(value)) {
+            mergedRules[key] = cloneRuleValue(value);
+            return;
+        }
+
+        if (isPlainObject(value) && isPlainObject(mergedRules[key])) {
+            mergedRules[key] = mergeClientModelRoutingRules(mergedRules[key], value);
+            return;
+        }
+
+        mergedRules[key] = cloneRuleValue(value);
+    });
+
+    return mergedRules;
+}
+
+function getMergedClientModelRoutingRules(overrides = {}) {
+    return mergeClientModelRoutingRules(defaultClientModelRoutingRules, overrides);
+}
+
+function buildRoutingTokenListHtml(values = []) {
+    const safeValues = Array.isArray(values) && values.length > 0 ? values : ['N/A'];
+    return `
+        <div class="routing-token-list">
+            ${safeValues.map(value => `<span class="routing-token">${escapeHtml(value)}</span>`).join('')}
+        </div>
+    `;
+}
+
+function buildRoutingTableHtml(columns, rows) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+        return `<div class="routing-preview-state empty">${escapeHtml(t('config.routing.empty'))}</div>`;
+    }
+
+    return `
+        <div class="routing-table-wrapper">
+            <table class="routing-table">
+                <thead>
+                    <tr>${columns.map(column => `<th>${escapeHtml(column.label)}</th>`).join('')}</tr>
+                </thead>
+                <tbody>
+                    ${rows.map(row => `
+                        <tr>
+                            ${columns.map(column => `<td>${column.render(row)}</td>`).join('')}
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+function collectRoutingAliasNotes(protocol, aliases = []) {
+    const normalizedAliases = aliases
+        .filter(alias => typeof alias === 'string')
+        .map(alias => alias.trim().toLowerCase());
+    const notes = [];
+
+    if (protocol === 'openai') {
+        if (normalizedAliases.some(alias => alias.includes('(default)'))) {
+            notes.push(t('config.routing.note.codexDefaultAlias'));
+        }
+        if (normalizedAliases.some(alias => alias.includes('(current)'))) {
+            notes.push(t('config.routing.note.codexCurrentAlias'));
+        }
+    } else if (normalizedAliases.includes('default') || normalizedAliases.includes('default (recommended)')) {
+        notes.push(t('config.routing.note.defaultAlias'));
+    }
+
+    if (normalizedAliases.some(alias => alias.includes('1m') || alias.includes('-1m'))) {
+        notes.push(t('config.routing.note.oneMillionAlias'));
+    }
+
+    notes.push(t('config.routing.note.directAlias'));
+    return [...new Set(notes)].join(' / ');
+}
+
+function getRoutingAliasRows(rules) {
+    const protocolConfigs = [
+        {
+            client: t('config.routing.client.claude'),
+            protocol: t('config.routing.protocol.claude'),
+            protocolKey: 'claude'
+        },
+        {
+            client: t('config.routing.client.codex'),
+            protocol: t('config.routing.protocol.openai'),
+            protocolKey: 'openai'
+        }
+    ];
+
+    return protocolConfigs.flatMap(({ client, protocol, protocolKey }) => {
+        const aliasMap = rules?.protocolModelAliases?.[protocolKey] || {};
+        return Object.entries(aliasMap).map(([canonicalModel, aliases]) => {
+            const uniqueAliases = [...new Set([
+                canonicalModel,
+                ...(Array.isArray(aliases) ? aliases : [])
+            ])].filter(Boolean);
+
+            return {
+                client,
+                protocol,
+                canonicalModel,
+                aliases: uniqueAliases,
+                note: collectRoutingAliasNotes(protocolKey, uniqueAliases)
+            };
+        });
+    });
+}
+
+function getAntigravityInternalModel(rules, canonicalModel) {
+    return rules?.antigravityAliases?.[canonicalModel]?.internal || canonicalModel;
+}
+
+function getRoutingProviderRows(rules) {
+    const providerTargets = rules?.providerTargets || {};
+    const geminiModel = providerTargets.geminiCli?.defaultModel || 'gemini-3.1-pro-preview';
+    const kiroDefaultModel = providerTargets.kiro?.defaultModel || 'claude-sonnet-4-5';
+    const kiroHaikuModel = providerTargets.kiro?.haikuModel || 'claude-haiku-4-5';
+    const openaiDefaultModel = providerTargets.openaiCompatible?.defaultModel || 'gpt-5.4';
+    const grokDefaultModel = providerTargets.grokCompatible?.defaultModel || 'grok-4.20';
+    const antigravitySonnetPublic = providerTargets.antigravity?.sonnetModel || 'claude-sonnet-4-6';
+    const antigravityOpusPublic = providerTargets.antigravity?.opusModel || 'claude-opus-4-6';
+    const antigravitySonnetInternal = getAntigravityInternalModel(rules, antigravitySonnetPublic);
+    const antigravityOpusInternal = getAntigravityInternalModel(rules, antigravityOpusPublic);
+    const codexTargets = providerTargets.codexToClaude || {};
+    const canonicalOpenAIModels = Object.keys(rules?.protocolModelAliases?.openai || {});
+    const highCapabilityModel = codexTargets.highCapabilityModel || 'gpt-5.4';
+    const supportedCodexClientModels = Array.isArray(codexTargets.supportedClientModels)
+        ? codexTargets.supportedClientModels
+        : canonicalOpenAIModels;
+    const standardCodexModels = supportedCodexClientModels.filter(model => model !== highCapabilityModel);
+    const openAICompatibleRows = canonicalOpenAIModels.map(model => ({
+        client: t('config.routing.client.codex'),
+        protocol: t('config.routing.protocol.openai'),
+        requestModels: [model],
+        provider: t('config.routing.provider.openaiCompatible'),
+        upstreamModels: [model],
+        note: t('config.routing.note.openaiPassthrough')
+    }));
+    const highClaudeTarget = Array.isArray(codexTargets.highCapabilityPreferredModels) && codexTargets.highCapabilityPreferredModels.length > 0
+        ? codexTargets.highCapabilityPreferredModels[0]
+        : null;
+    const standardClaudeTarget = Array.isArray(codexTargets.standardPreferredModels) && codexTargets.standardPreferredModels.length > 0
+        ? codexTargets.standardPreferredModels[0]
+        : null;
+
+    const rows = [
+        {
+            client: t('config.routing.client.claude'),
+            protocol: t('config.routing.protocol.claude'),
+            requestModels: ['claude-*'],
+            provider: t('config.routing.provider.claudeCompatible'),
+            upstreamModels: ['claude-*'],
+            note: t('config.routing.note.preserveClaudeModel')
+        },
+        {
+            client: t('config.routing.client.claude'),
+            protocol: t('config.routing.protocol.claude'),
+            requestModels: ['claude-*'],
+            provider: t('config.routing.provider.geminiCli'),
+            upstreamModels: [geminiModel],
+            note: t('config.routing.note.routeToGemini', { model: geminiModel })
+        },
+        {
+            client: t('config.routing.client.claude'),
+            protocol: t('config.routing.protocol.claude'),
+            requestModels: ['claude-sonnet-*', 'claude-haiku-*'],
+            provider: t('config.routing.provider.antigravity'),
+            upstreamModels: [antigravitySonnetInternal],
+            note: t('config.routing.note.routeToAntigravity', {
+                publicModel: antigravitySonnetPublic,
+                upstreamModel: antigravitySonnetInternal
+            })
+        },
+        {
+            client: t('config.routing.client.claude'),
+            protocol: t('config.routing.protocol.claude'),
+            requestModels: ['claude-opus-*'],
+            provider: t('config.routing.provider.antigravity'),
+            upstreamModels: [antigravityOpusInternal],
+            note: t('config.routing.note.routeToAntigravity', {
+                publicModel: antigravityOpusPublic,
+                upstreamModel: antigravityOpusInternal
+            })
+        },
+        {
+            client: t('config.routing.client.claude'),
+            protocol: t('config.routing.protocol.claude'),
+            requestModels: ['claude-haiku-*'],
+            provider: t('config.routing.provider.kiro'),
+            upstreamModels: [kiroHaikuModel],
+            note: t('config.routing.note.routeToKiroHaiku', { model: kiroHaikuModel })
+        },
+        {
+            client: t('config.routing.client.claude'),
+            protocol: t('config.routing.protocol.claude'),
+            requestModels: ['claude-sonnet-*', 'claude-opus-*'],
+            provider: t('config.routing.provider.kiro'),
+            upstreamModels: [kiroDefaultModel],
+            note: t('config.routing.note.routeToKiroSonnet', { model: kiroDefaultModel })
+        },
+        {
+            client: t('config.routing.client.claude'),
+            protocol: t('config.routing.protocol.claude'),
+            requestModels: ['claude-*'],
+            provider: t('config.routing.provider.openaiCompatible'),
+            upstreamModels: [openaiDefaultModel],
+            note: t('config.routing.note.routeToOpenAI', { model: openaiDefaultModel })
+        },
+        {
+            client: t('config.routing.client.claude'),
+            protocol: t('config.routing.protocol.claude'),
+            requestModels: ['claude-*'],
+            provider: t('config.routing.provider.grokCompatible'),
+            upstreamModels: [grokDefaultModel],
+            note: t('config.routing.note.routeToGrok', { model: grokDefaultModel })
+        },
+        {
+            client: t('config.routing.client.codex'),
+            protocol: t('config.routing.protocol.openai'),
+            requestModels: supportedCodexClientModels,
+            provider: t('config.routing.provider.geminiCli'),
+            upstreamModels: [geminiModel],
+            note: t('config.routing.note.routeToGemini', { model: geminiModel })
+        },
+        {
+            client: t('config.routing.client.codex'),
+            protocol: t('config.routing.protocol.openai'),
+            requestModels: supportedCodexClientModels.includes(highCapabilityModel) ? [highCapabilityModel] : [],
+            provider: t('config.routing.provider.antigravity'),
+            upstreamModels: [antigravityOpusInternal],
+            note: `${t('config.routing.note.codexToClaudeHigh')} / ${t('config.routing.note.routeToAntigravity', {
+                publicModel: antigravityOpusPublic,
+                upstreamModel: antigravityOpusInternal
+            })}`
+        },
+        {
+            client: t('config.routing.client.codex'),
+            protocol: t('config.routing.protocol.openai'),
+            requestModels: standardCodexModels,
+            provider: t('config.routing.provider.antigravity'),
+            upstreamModels: [antigravitySonnetInternal],
+            note: `${t('config.routing.note.codexToClaudeStandard')} / ${t('config.routing.note.routeToAntigravity', {
+                publicModel: antigravitySonnetPublic,
+                upstreamModel: antigravitySonnetInternal
+            })}`
+        },
+        {
+            client: t('config.routing.client.codex'),
+            protocol: t('config.routing.protocol.openai'),
+            requestModels: supportedCodexClientModels,
+            provider: t('config.routing.provider.kiro'),
+            upstreamModels: [kiroDefaultModel],
+            note: t('config.routing.note.routeToKiroSonnet', { model: kiroDefaultModel })
+        },
+        {
+            client: t('config.routing.client.codex'),
+            protocol: t('config.routing.protocol.openai'),
+            requestModels: supportedCodexClientModels.includes(highCapabilityModel) ? [highCapabilityModel] : [],
+            provider: t('config.routing.provider.claudeCompatible'),
+            upstreamModels: highClaudeTarget ? [highClaudeTarget] : [],
+            note: t('config.routing.note.codexToClaudeHigh')
+        },
+        {
+            client: t('config.routing.client.codex'),
+            protocol: t('config.routing.protocol.openai'),
+            requestModels: standardCodexModels,
+            provider: t('config.routing.provider.claudeCompatible'),
+            upstreamModels: standardClaudeTarget ? [standardClaudeTarget] : [],
+            note: t('config.routing.note.codexToClaudeStandard')
+        },
+        ...openAICompatibleRows,
+        {
+            client: t('config.routing.client.codex'),
+            protocol: t('config.routing.protocol.openai'),
+            requestModels: supportedCodexClientModels,
+            provider: t('config.routing.provider.grokCompatible'),
+            upstreamModels: [grokDefaultModel],
+            note: t('config.routing.note.routeToGrok', { model: grokDefaultModel })
+        }
+    ];
+
+    return rows.filter(row => Array.isArray(row.requestModels) && row.requestModels.length > 0);
+}
+
+function renderClientModelRoutingPreview(effectiveRules, { invalid = false } = {}) {
+    const previewEl = document.getElementById('clientModelRoutingPreview');
+    if (!previewEl) {
+        return;
+    }
+
+    clientModelRoutingPreviewState = {
+        effectiveRules,
+        invalid
+    };
+
+    if (invalid) {
+        previewEl.innerHTML = `<div class="routing-preview-state error">${escapeHtml(t('config.routing.previewInvalid'))}</div>`;
+        return;
+    }
+
+    if (!isPlainObject(effectiveRules)) {
+        previewEl.innerHTML = `<div class="routing-preview-state empty">${escapeHtml(t('config.routing.empty'))}</div>`;
+        return;
+    }
+
+    const aliasRows = getRoutingAliasRows(effectiveRules);
+    const providerRows = getRoutingProviderRows(effectiveRules);
+    const aliasColumns = [
+        { label: t('config.routing.columns.client'), render: row => escapeHtml(row.client) },
+        { label: t('config.routing.columns.protocol'), render: row => escapeHtml(row.protocol) },
+        { label: t('config.routing.columns.canonicalModel'), render: row => buildRoutingTokenListHtml([row.canonicalModel]) },
+        { label: t('config.routing.columns.aliases'), render: row => buildRoutingTokenListHtml(row.aliases) },
+        { label: t('config.routing.columns.note'), render: row => `<div class="routing-note">${escapeHtml(row.note)}</div>` }
+    ];
+    const providerColumns = [
+        { label: t('config.routing.columns.client'), render: row => escapeHtml(row.client) },
+        { label: t('config.routing.columns.protocol'), render: row => escapeHtml(row.protocol) },
+        { label: t('config.routing.columns.requestModel'), render: row => buildRoutingTokenListHtml(row.requestModels) },
+        { label: t('config.routing.columns.provider'), render: row => escapeHtml(row.provider) },
+        { label: t('config.routing.columns.upstreamModel'), render: row => buildRoutingTokenListHtml(row.upstreamModels) },
+        { label: t('config.routing.columns.note'), render: row => `<div class="routing-note">${escapeHtml(row.note)}</div>` }
+    ];
+
+    previewEl.innerHTML = `
+        <div class="routing-preview-card">
+            <div class="routing-preview-card-header">
+                <h5>${escapeHtml(t('config.routing.aliasTableTitle'))}</h5>
+                <p>${escapeHtml(t('config.routing.aliasTableDescription'))}</p>
+            </div>
+            ${buildRoutingTableHtml(aliasColumns, aliasRows)}
+        </div>
+        <div class="routing-preview-card">
+            <div class="routing-preview-card-header">
+                <h5>${escapeHtml(t('config.routing.providerTableTitle'))}</h5>
+                <p>${escapeHtml(t('config.routing.providerTableDescription'))}</p>
+            </div>
+            ${buildRoutingTableHtml(providerColumns, providerRows)}
+        </div>
+    `;
+}
+
+function updateClientModelRoutingPreviewFromEditor() {
+    const textarea = document.getElementById('clientModelRoutingRules');
+    if (!textarea) {
+        return;
+    }
+
+    const rawValue = textarea.value.trim();
+    if (!rawValue) {
+        renderClientModelRoutingPreview(getMergedClientModelRoutingRules({}));
+        return;
+    }
+
+    try {
+        const parsedRules = JSON.parse(rawValue);
+        if (!isPlainObject(parsedRules)) {
+            throw new Error('clientModelRoutingRules must be an object');
+        }
+
+        renderClientModelRoutingPreview(getMergedClientModelRoutingRules(parsedRules));
+    } catch {
+        renderClientModelRoutingPreview(clientModelRoutingPreviewState.effectiveRules, { invalid: true });
+    }
+}
+
+function initClientModelRoutingPreview() {
+    const textarea = document.getElementById('clientModelRoutingRules');
+    if (!textarea) {
+        return;
+    }
+
+    if (!textarea.dataset.previewBound) {
+        textarea.addEventListener('input', updateClientModelRoutingPreviewFromEditor);
+        textarea.dataset.previewBound = 'true';
+    }
+
+    if (!clientModelRoutingLanguageListenerBound) {
+        window.addEventListener('languageChanged', () => {
+            renderClientModelRoutingPreview(
+                clientModelRoutingPreviewState.effectiveRules,
+                { invalid: clientModelRoutingPreviewState.invalid }
+            );
+        });
+        clientModelRoutingLanguageListenerBound = true;
+    }
+}
 
 /**
  * 更新提供商配置并重新渲染配置页面的提供商选择标签
@@ -253,6 +683,12 @@ async function loadConfiguration() {
         const providerFallbackChainEl = document.getElementById('providerFallbackChain');
         const modelFallbackMappingEl = document.getElementById('modelFallbackMapping');
         const clientModelRoutingRulesEl = document.getElementById('clientModelRoutingRules');
+        defaultClientModelRoutingRules = isPlainObject(data.defaultClientModelRoutingRules)
+            ? cloneRuleValue(data.defaultClientModelRoutingRules)
+            : (isPlainObject(data.effectiveClientModelRoutingRules)
+                ? cloneRuleValue(data.effectiveClientModelRoutingRules)
+                : {});
+        initClientModelRoutingPreview();
 
         if (systemPromptFilePathEl) systemPromptFilePathEl.value = data.SYSTEM_PROMPT_FILE_PATH || 'configs/input_system_prompt.txt';
         if (systemPromptModeEl) systemPromptModeEl.value = data.SYSTEM_PROMPT_MODE || 'append';
@@ -322,12 +758,13 @@ async function loadConfiguration() {
         }
 
         if (clientModelRoutingRulesEl) {
-            if (data.clientModelRoutingRules && typeof data.clientModelRoutingRules === 'object') {
+            if (isPlainObject(data.clientModelRoutingRules) && Object.keys(data.clientModelRoutingRules).length > 0) {
                 clientModelRoutingRulesEl.value = JSON.stringify(data.clientModelRoutingRules, null, 2);
             } else {
                 clientModelRoutingRulesEl.value = '';
             }
         }
+        updateClientModelRoutingPreviewFromEditor();
         
         // 加载代理配置
         const proxyUrlEl = document.getElementById('proxyUrl');
@@ -538,8 +975,11 @@ async function saveConfiguration() {
     if (clientModelRoutingRulesValue) {
         try {
             config.clientModelRoutingRules = JSON.parse(clientModelRoutingRulesValue);
+            if (!isPlainObject(config.clientModelRoutingRules)) {
+                throw new Error('clientModelRoutingRules must be an object');
+            }
         } catch (e) {
-            showToast(t('common.error'), '客户端模型路由表格式无效，请输入有效的 JSON', 'error');
+            showToast(t('common.error'), t('config.routing.invalidJson'), 'error');
             return;
         }
     } else {
@@ -617,6 +1057,7 @@ async function saveConfiguration() {
         }
         
         await window.apiClient.post('/reload-config');
+        await loadConfiguration();
         showToast(t('common.success'), t('common.configSaved'), 'success');
         
         // 检查当前是否在提供商池管理页面，如果是则刷新数据

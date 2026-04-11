@@ -143,4 +143,43 @@ describe('session affinity fixes', () => {
         expect(provider.scheduledRecoveryTime).toBeNull();
         expect(manager.consistentHashRings.get(providerType).nodeSet).toEqual(new Set(['node-a', 'node-b']));
     });
+
+    test('links previous_response_id back to the original session binding', () => {
+        const manager = createManager();
+
+        const firstTurn = manager.extractSessionAffinityContext({}, providerType, 'gpt-5.4', {
+            apiKey: 'key-1',
+            ip: '10.0.0.8',
+            userAgent: 'codex-cli'
+        });
+        const firstNode = manager.selectNodeForSession(providerType, firstTurn.sessionKey);
+
+        manager.bindResponseIdToSession('resp_turn_1', firstTurn.sessionKey);
+
+        const followUp = manager.extractSessionAffinityContext({
+            previous_response_id: 'resp_turn_1'
+        }, providerType, 'gpt-5.4', {
+            apiKey: 'key-1',
+            ip: '10.0.0.8',
+            userAgent: 'codex-cli'
+        });
+        const secondNode = manager.selectNodeForSession(providerType, followUp.sessionKey);
+
+        expect(firstTurn.sessionKey.startsWith('p2:')).toBe(true);
+        expect(followUp.aliasResolved).toBe(true);
+        expect(followUp.sessionKey).toBe(firstTurn.sessionKey);
+        expect(secondNode).toBe(firstNode);
+    });
+
+    test('scheduled health updates do not inflate usage count', () => {
+        const manager = createManager();
+        const provider = manager.providerStatus[providerType].find(p => p.config.uuid === 'node-a').config;
+        provider.usageCount = 7;
+        provider.lastUsed = '2024-01-01T00:00:00.000Z';
+
+        manager.markProviderHealthy(providerType, provider, false, 'gpt-4o-mini', { incrementUsageCount: false });
+
+        expect(provider.usageCount).toBe(7);
+        expect(provider.lastUsed).toBe('2024-01-01T00:00:00.000Z');
+    });
 });

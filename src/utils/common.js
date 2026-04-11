@@ -396,6 +396,8 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                 if (clientDisconnected.value) {
                     break;
                 }
+
+                trackSessionResponseAliases(providerPoolManager, sessionKey, chunk);
                 
                 // [FIX] 跟踪工具调用并在结束时修正 finish_reason
                 // OpenAI 格式
@@ -684,6 +686,8 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
             logger.info(`[Response Convert] Converting response from ${toProvider} to ${fromProvider}`);
             clientResponse = convertData(nativeResponse, 'response', toProvider, fromProvider, model);
         }
+
+        trackSessionResponseAliases(providerPoolManager, sessionKey, clientResponse);
 
         // 监控钩子：非流式响应
         const hookRequestId = getPluginHookRequestId(CONFIG);
@@ -991,12 +995,20 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
         const clientIp = req.ip || req.socket?.remoteAddress;
         const userAgent = req.headers['user-agent'] || '';
 
-        sessionKey = providerPoolManager.extractSessionKey(
+        const sessionContext = providerPoolManager.extractSessionAffinityContext(
             originalRequestBody,
             CONFIG.MODEL_PROVIDER,
             model,
             { apiKey, ip: clientIp, userAgent }
         );
+        sessionKey = sessionContext.sessionKey;
+
+        if (sessionKey) {
+            const aliasSuffix = sessionContext.aliasResolved ? ' (resolved from prior response)' : '';
+            logger.info(`[SessionAffinity] Using session key ${providerPoolManager.formatSessionKeyForLog(sessionKey)} via ${sessionContext.source}${aliasSuffix}`);
+        } else {
+            logger.debug('[SessionAffinity] No session key extracted for current request');
+        }
     }
 
     let actualCustomName = CONFIG.customName;
@@ -1103,6 +1115,43 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
 function _extractModelAndStreamInfo(req, requestBody, fromProvider) {
     const strategy = ProviderStrategyFactory.getStrategy(getProtocolPrefix(fromProvider));
     return strategy.extractModelAndStreamInfo(req, requestBody);
+}
+
+function collectSessionResponseIds(payload, ids = new Set()) {
+    if (!payload || typeof payload !== 'object') {
+        return ids;
+    }
+
+    if (Array.isArray(payload)) {
+        for (const item of payload) {
+            collectSessionResponseIds(item, ids);
+        }
+        return ids;
+    }
+
+    if (typeof payload.response_id === 'string' && payload.response_id) {
+        ids.add(payload.response_id);
+    }
+
+    if (payload.response && typeof payload.response === 'object' && typeof payload.response.id === 'string' && payload.response.id) {
+        ids.add(payload.response.id);
+    }
+
+    if (payload.object === 'response' && typeof payload.id === 'string' && payload.id) {
+        ids.add(payload.id);
+    }
+
+    return ids;
+}
+
+function trackSessionResponseAliases(providerPoolManager, sessionKey, payload) {
+    if (!providerPoolManager?.sessionAffinityConfig?.sessionAffinityEnabled || !sessionKey || !payload) {
+        return;
+    }
+
+    for (const responseId of collectSessionResponseIds(payload)) {
+        providerPoolManager.bindResponseIdToSession(responseId, sessionKey);
+    }
 }
 
 async function _applySystemPromptFromFile(config, requestBody, toProvider) {

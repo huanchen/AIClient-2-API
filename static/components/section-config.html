@@ -198,9 +198,16 @@
                     <textarea id="modelFallbackMapping" class="form-control" rows="4" data-i18n-placeholder="config.advanced.modelFallbackMappingPlaceholder"></textarea>
                 </div>
                 <div class="form-group pool-section">
-                    <label for="clientModelRoutingRules">客户端模型路由表 (JSON)</label>
-                    <textarea id="clientModelRoutingRules" class="form-control" rows="10" placeholder="治理 Claude / Codex 客户端模型名到上游真实模型的映射表"></textarea>
-                    <small class="form-text">支持同时配置 `claude` / `openai` 协议别名、Codex/Claude 到 Gemini/Claude/OpenAI/Grok 的预路由规则，以及 `-1M` 这类客户端别名。</small>
+                    <label for="clientModelRoutingRules" data-i18n="config.routing.editorLabel">客户端模型路由表 (JSON)</label>
+                    <textarea id="clientModelRoutingRules" class="form-control" rows="10" data-i18n-placeholder="config.routing.editorPlaceholder" placeholder="治理 Claude / Codex 客户端模型名到上游真实模型的映射表"></textarea>
+                    <small class="form-text" data-i18n="config.routing.editorNote">这里只保存你的覆盖项；下方关系表展示当前生效后的完整映射，包含 Claude / OpenAI 协议别名、Claude/Codex 到 Gemini/Claude/OpenAI/Grok 的上游路由，以及 `-1M` 这类客户端别名。</small>
+                </div>
+                <div class="routing-preview-section" aria-live="polite">
+                    <div class="routing-preview-header">
+                        <h4 data-i18n="config.routing.previewTitle">客户端模型关系表</h4>
+                        <p class="form-text" data-i18n="config.routing.previewNote">上面的 JSON 文本框用于治理覆盖项；下面两张表用来核对当前生效的“客户端 -> Provider -> 上游模型”结果。</p>
+                    </div>
+                    <div id="clientModelRoutingPreview" class="routing-preview-content"></div>
                 </div>
             </div>
 

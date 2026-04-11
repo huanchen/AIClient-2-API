@@ -6,7 +6,10 @@ import crypto from 'crypto';
 import { CONFIG } from '../core/config-manager.js';
 import { serviceInstances } from '../providers/adapter.js';
 import { initApiService } from '../services/service-manager.js';
-import { getEffectiveClientModelRoutingRules } from '../providers/provider-models.js';
+import {
+    getDefaultClientModelRoutingRules,
+    getEffectiveClientModelRoutingRules
+} from '../providers/provider-models.js';
 import { getRequestBody } from '../utils/common.js';
 import { broadcastEvent } from '../ui-modules/event-broadcast.js';
 import { HEALTH_CHECK, PASSWORD, NETWORK, RETRY } from '../utils/constants.js';
@@ -83,7 +86,9 @@ export async function handleGetConfig(req, res, currentConfig) {
         REFRESH_CONCURRENCY_PER_PROVIDER: currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER,
         providerFallbackChain: currentConfig.providerFallbackChain,
         modelFallbackMapping: currentConfig.modelFallbackMapping,
-        clientModelRoutingRules: getEffectiveClientModelRoutingRules(currentConfig.clientModelRoutingRules),
+        clientModelRoutingRules: currentConfig.clientModelRoutingRules || {},
+        effectiveClientModelRoutingRules: getEffectiveClientModelRoutingRules(currentConfig.clientModelRoutingRules),
+        defaultClientModelRoutingRules: getDefaultClientModelRoutingRules(),
         PROXY_URL: currentConfig.PROXY_URL,
         PROXY_ENABLED_PROVIDERS: currentConfig.PROXY_ENABLED_PROVIDERS,
         TLS_SIDECAR_ENABLED: currentConfig.TLS_SIDECAR_ENABLED,

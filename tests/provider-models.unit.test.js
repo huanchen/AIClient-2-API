@@ -141,6 +141,21 @@ describe('provider-models helpers', () => {
             .toBe('gemini-2.5-flash');
     });
 
+    test('allows array-based routing overrides to be explicitly cleared', () => {
+        setClientModelRoutingRules({
+            providerTargets: {
+                codexToClaude: {
+                    supportedClientModels: []
+                }
+            }
+        });
+
+        expect(normalizeRequestedModelForProvider('gemini-cli-oauth', 'gpt-5.4'))
+            .toBe('gpt-5.4');
+        expect(normalizeRequestedModelForProvider('claude-custom', 'gpt-5.4', ['claude-opus-4-6']))
+            .toBe('gpt-5.4');
+    });
+
     test('exposes public Claude model ids for Antigravity aliases', () => {
         expect(toPublicProviderModelId('gemini-antigravity', 'gemini-claude-sonnet-4-6'))
             .toBe('claude-sonnet-4-6');

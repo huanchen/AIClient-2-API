@@ -368,10 +368,14 @@ function pickString(value, fallbackValue) {
 }
 
 function pickStringArray(value, fallbackValue = []) {
-    const normalizedValue = Array.isArray(value)
-        ? value.filter(item => typeof item === 'string').map(item => item.trim()).filter(Boolean)
-        : [];
-    return normalizedValue.length > 0 ? normalizedValue : [...fallbackValue];
+    if (Array.isArray(value)) {
+        return value
+            .filter(item => typeof item === 'string')
+            .map(item => item.trim())
+            .filter(Boolean);
+    }
+
+    return [...fallbackValue];
 }
 
 export function getEffectiveClientModelRoutingRules(overrideRules = {}) {

@@ -103,6 +103,8 @@ export class ProviderPoolManager {
         };
         this.sessionAffinity = new SessionAffinityMap(this.sessionAffinityConfig);
         this.consistentHashRings = new Map();
+        this.sessionResponseAliases = new Map();
+        this.maxSessionResponseAliases = Math.max(this.sessionAffinityConfig.maxSessions * 4, 1000);
         this._setupPeriodicCleanup();
 
         this.initializeProviderStatus();
@@ -807,6 +809,185 @@ export class ProviderPoolManager {
     }
 
     /**
+     * 格式化会话键，避免日志过长
+     * @param {string|null} sessionKey
+     * @returns {string}
+     */
+    formatSessionKeyForLog(sessionKey) {
+        if (!sessionKey) {
+            return 'null';
+        }
+        const normalized = String(sessionKey);
+        if (normalized.length <= 48) {
+            return normalized;
+        }
+        return `${normalized.slice(0, 20)}...${normalized.slice(-12)}`;
+    }
+
+    /**
+     * 清理已失效的响应 ID -> 会话别名
+     * @returns {number}
+     */
+    cleanupExpiredSessionAliases() {
+        let removed = 0;
+        for (const [responseId, sessionKey] of this.sessionResponseAliases.entries()) {
+            if (!this.sessionAffinity.has(sessionKey)) {
+                this.sessionResponseAliases.delete(responseId);
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    /**
+     * 解析响应 ID 对应的已绑定会话
+     * @param {string} responseId
+     * @returns {string|null}
+     */
+    resolveSessionAlias(responseId) {
+        if (!responseId) {
+            return null;
+        }
+
+        const normalizedResponseId = String(responseId).trim();
+        if (!normalizedResponseId) {
+            return null;
+        }
+
+        const sessionKey = this.sessionResponseAliases.get(normalizedResponseId);
+        if (!sessionKey) {
+            return null;
+        }
+
+        if (!this.sessionAffinity.has(sessionKey)) {
+            this.sessionResponseAliases.delete(normalizedResponseId);
+            return null;
+        }
+
+        return sessionKey;
+    }
+
+    /**
+     * 将客户端响应 ID 绑定到当前会话键，解决下一轮 previous_response_id 失粘问题
+     * @param {string} responseId
+     * @param {string} sessionKey
+     */
+    bindResponseIdToSession(responseId, sessionKey) {
+        if (!this.sessionAffinityConfig.sessionAffinityEnabled || !responseId || !sessionKey) {
+            return;
+        }
+
+        const normalizedResponseId = String(responseId).trim();
+        if (!normalizedResponseId) {
+            return;
+        }
+
+        this.sessionResponseAliases.set(normalizedResponseId, sessionKey);
+        if (this.sessionResponseAliases.size > this.maxSessionResponseAliases) {
+            this.cleanupExpiredSessionAliases();
+            while (this.sessionResponseAliases.size > this.maxSessionResponseAliases) {
+                const oldestResponseId = this.sessionResponseAliases.keys().next().value;
+                if (!oldestResponseId) {
+                    break;
+                }
+                this.sessionResponseAliases.delete(oldestResponseId);
+            }
+        }
+    }
+
+    /**
+     * 提取会话键及其来源上下文
+     * @param {Object} requestBody - 请求体
+     * @param {string} providerType - 提供商类型
+     * @param {string} model - 模型名称
+     * @param {Object} options - 选项，包含 apiKey, ip, userAgent
+     * @returns {{sessionKey: string|null, source: string, rawValue: string|null, aliasResolved: boolean}}
+     */
+    extractSessionAffinityContext(requestBody, providerType, model, options = {}) {
+        const p0Fields = ['conversation_id', 'conversationId', 'session_id', 'sessionId'];
+        for (const field of p0Fields) {
+            if (requestBody[field]) {
+                return {
+                    sessionKey: `p0:${requestBody[field]}`,
+                    source: `request.${field}`,
+                    rawValue: String(requestBody[field]),
+                    aliasResolved: false
+                };
+            }
+        }
+
+        if (requestBody.metadata?.conversation_id) {
+            return {
+                sessionKey: `p0:${requestBody.metadata.conversation_id}`,
+                source: 'request.metadata.conversation_id',
+                rawValue: String(requestBody.metadata.conversation_id),
+                aliasResolved: false
+            };
+        }
+        if (requestBody.metadata?.session_id) {
+            return {
+                sessionKey: `p0:${requestBody.metadata.session_id}`,
+                source: 'request.metadata.session_id',
+                rawValue: String(requestBody.metadata.session_id),
+                aliasResolved: false
+            };
+        }
+
+        const responseLinkFields = [
+            { value: requestBody.response_id, prefix: 'p0', source: 'request.response_id' },
+            { value: requestBody.previous_response_id, prefix: 'p1', source: 'request.previous_response_id' },
+            { value: requestBody.parentResponseId, prefix: 'p1', source: 'request.parentResponseId' }
+        ];
+
+        for (const candidate of responseLinkFields) {
+            if (!candidate.value) {
+                continue;
+            }
+
+            const aliasedSessionKey = this.resolveSessionAlias(candidate.value);
+            if (aliasedSessionKey) {
+                return {
+                    sessionKey: aliasedSessionKey,
+                    source: candidate.source,
+                    rawValue: String(candidate.value),
+                    aliasResolved: true
+                };
+            }
+
+            return {
+                sessionKey: `${candidate.prefix}:${candidate.value}`,
+                source: candidate.source,
+                rawValue: String(candidate.value),
+                aliasResolved: false
+            };
+        }
+
+        const { apiKey = '', ip = '', userAgent = '' } = options;
+        if (!apiKey && !ip && !userAgent) {
+            return {
+                sessionKey: null,
+                source: 'none',
+                rawValue: null,
+                aliasResolved: false
+            };
+        }
+
+        const composite = `${apiKey}:${ip}:${userAgent}:${providerType}:${model}`;
+        let hash = 0;
+        for (let i = 0; i < composite.length; i++) {
+            hash = ((hash << 5) - hash) + composite.charCodeAt(i);
+            hash |= 0;
+        }
+
+        return {
+            sessionKey: `p2:${Math.abs(hash).toString(16)}`,
+            source: 'weak(apiKey+ip+userAgent+provider+model)',
+            rawValue: null,
+            aliasResolved: false
+        };
+    }
+
+    /**
      * 提取会话键
      * @param {Object} requestBody - 请求体
      * @param {string} providerType - 提供商类型
@@ -815,45 +996,7 @@ export class ProviderPoolManager {
      * @returns {string|null} 会话键，null表示无会话键
      */
     extractSessionKey(requestBody, providerType, model, options = {}) {
-        // P0: 请求体中的顶级会话ID
-        const p0Fields = ['conversation_id', 'conversationId', 'session_id', 'sessionId', 'response_id'];
-        for (const field of p0Fields) {
-            if (requestBody[field]) {
-                return `p0:${requestBody[field]}`;
-            }
-        }
-
-        // P0: metadata 中的会话ID
-        if (requestBody.metadata?.conversation_id) {
-            return `p0:${requestBody.metadata.conversation_id}`;
-        }
-        if (requestBody.metadata?.session_id) {
-            return `p0:${requestBody.metadata.session_id}`;
-        }
-
-        // P1: 父响应ID / 前一个响应ID（延续对话）
-        if (requestBody.previous_response_id) {
-            return `p1:${requestBody.previous_response_id}`;
-        }
-        if (requestBody.parentResponseId) {
-            return `p1:${requestBody.parentResponseId}`;
-        }
-
-        // P2: 基于 API key + IP + UA + provider + model 的哈希（弱信号）
-        const { apiKey = '', ip = '', userAgent = '' } = options;
-        if (!apiKey && !ip && !userAgent) {
-            // 没有足够信息生成弱信号，返回 null 使用一致性hash
-            return null;
-        }
-
-        const composite = `${apiKey}:${ip}:${userAgent}:${providerType}:${model}`;
-        // 简单哈希计算
-        let hash = 0;
-        for (let i = 0; i < composite.length; i++) {
-            hash = ((hash << 5) - hash) + composite.charCodeAt(i);
-            hash |= 0; // 转换为32位整数
-        }
-        return `p2:${Math.abs(hash).toString(16)}`;
+        return this.extractSessionAffinityContext(requestBody, providerType, model, options).sessionKey;
     }
 
     /**
@@ -992,10 +1135,10 @@ export class ProviderPoolManager {
         if (!this.sessionAffinityConfig.sessionAffinityEnabled) {
             return;
         }
-        const before = this.sessionAffinity.size;
         const removed = this.sessionAffinity.cleanupExpired();
-        if (removed > 0) {
-            logger.debug(`[SessionAffinity] Cleaned up ${removed} expired sessions, ${this.sessionAffinity.size} remaining`);
+        const removedAliases = this.cleanupExpiredSessionAliases();
+        if (removed > 0 || removedAliases > 0) {
+            logger.debug(`[SessionAffinity] Cleaned up ${removed} expired sessions and ${removedAliases} stale response aliases, ${this.sessionAffinity.size} sessions remaining`);
         }
     }
 
@@ -1031,7 +1174,7 @@ export class ProviderPoolManager {
             }
 
             if (!isCooled && isStillHealthy) {
-                logger.debug(`[SessionAffinity] Reusing bound node ${session.boundUuid} for session ${sessionKey}`);
+                logger.info(`[SessionAffinity] Reusing bound node ${session.boundUuid} for ${providerType} (${this.formatSessionKeyForLog(sessionKey)})`);
                 this.sessionAffinity.touch(sessionKey);
                 return session.boundUuid;
             }
@@ -1088,7 +1231,7 @@ export class ProviderPoolManager {
                 lastAccessed: now,
                 cooling: existingSession.cooling instanceof Map ? existingSession.cooling : new Map()
             });
-            logger.debug(`[SessionAffinity] Bound session ${sessionKey} to node ${selected}`);
+            logger.info(`[SessionAffinity] Bound ${providerType} ${this.formatSessionKeyForLog(sessionKey)} to node ${selected}`);
         }
 
         return selected;
@@ -1255,10 +1398,12 @@ export class ProviderPoolManager {
                         selectedProvider.config.usageCount++;
                     }
                     this._debouncedSave(providerType);
-                    this._log('debug', `[SessionAffinity] Selected by affinity: ${sessionSelectedUuid} for ${providerType}`);
+                    this._log('info', `[SessionAffinity] Selected by affinity: ${sessionSelectedUuid} for ${providerType} (${this.formatSessionKeyForLog(sessionKey)})`);
                     return selectedProvider.config;
                 }
             }
+
+            this._log('info', `[SessionAffinity] No affinity node available for ${providerType} (${this.formatSessionKeyForLog(sessionKey)}), falling back to normal pool selection`);
         }
 
         // 提前计算池中最小序列号，避免在排序算法中重复 O(N) 计算
@@ -1969,8 +2114,9 @@ export class ProviderPoolManager {
      * @param {object} providerConfig - The configuration of the provider to mark.
      * @param {boolean} resetUsageCount - Whether to reset usage count (optional, default: false).
      * @param {string} [healthCheckModel] - Optional model name used for health check.
+     * @param {object} [options] - Optional behavior flags.
      */
-    markProviderHealthy(providerType, providerConfig, resetUsageCount = false, healthCheckModel = null) {
+    markProviderHealthy(providerType, providerConfig, resetUsageCount = false, healthCheckModel = null, options = {}) {
         if (!providerConfig?.uuid) {
             this._log('error', 'Invalid providerConfig in markProviderHealthy');
             return;
@@ -2003,7 +2149,7 @@ export class ProviderPoolManager {
             // 只有在明确要求重置使用计数时才重置
             if (resetUsageCount) {
                 provider.config.usageCount = 0;
-            }else{
+            } else if (options.incrementUsageCount !== false) {
                 provider.config.usageCount++;
                 provider.config.lastUsed = new Date().toISOString();
             }
@@ -2361,7 +2507,7 @@ export class ProviderPoolManager {
                     // Provider is healthy
                     successCount++;
                     this._log('info', `[ScheduledHealthCheck] ${displayName} (${providerType}) PASSED: model=${result.modelName || checkModelName} (${checkDuration}ms)`);
-                    this.markProviderHealthy(providerType, provider.config, false, result.modelName);
+                    this.markProviderHealthy(providerType, provider.config, false, result.modelName, { incrementUsageCount: false });
                 }
             } catch (error) {
                 const checkDuration = Date.now() - providerCheckStart;
@@ -2772,18 +2918,16 @@ class SessionAffinityMap {
     }
 
     /**
-     * 获取会话，同时更新访问时间
+     * 查看会话但不更新访问时间
      * @param {string} key - 会话键
-     * @returns {Object|null} 会话数据
+     * @returns {Object|null}
      */
-    get(key) {
+    peek(key) {
         const session = this.sessions.get(key);
         if (!session) {
             return null;
         }
 
-        // 检查是否过期（只有P2有TTL，P0永远不过期）
-        // P0格式: p0:..., P2格式: p2:...
         const isWeak = key.startsWith('p2:');
         if (isWeak) {
             const now = Date.now();
@@ -2791,6 +2935,29 @@ class SessionAffinityMap {
                 this.sessions.delete(key);
                 return null;
             }
+        }
+
+        return session;
+    }
+
+    /**
+     * 检查会话是否存在
+     * @param {string} key - 会话键
+     * @returns {boolean}
+     */
+    has(key) {
+        return this.peek(key) !== null;
+    }
+
+    /**
+     * 获取会话，同时更新访问时间
+     * @param {string} key - 会话键
+     * @returns {Object|null} 会话数据
+     */
+    get(key) {
+        const session = this.peek(key);
+        if (!session) {
+            return null;
         }
 
         // 更新访问时间
