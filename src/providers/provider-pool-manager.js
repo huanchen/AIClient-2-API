@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 import { getServiceAdapter, getRegisteredProviders } from './adapter.js';
 import logger from '../utils/logger.js';
 import { MODEL_PROVIDER, getProtocolPrefix } from '../utils/common.js';
@@ -28,6 +29,16 @@ export class ProviderPoolManager {
         'openai-codex-oauth': 'gpt-5-codex-mini',
         'openaiResponses-custom': 'gpt-4o-mini',
         'forward-api': 'gpt-4o-mini',
+    };
+
+    // 默认会话粘连配置
+    static DEFAULT_SESSION_AFFINITY_CONFIG = {
+        sessionAffinityEnabled: true,
+        defaultWeakTtlMs: 30 * 60 * 1000, // 30分钟
+        maxSessions: 10000,
+        virtualNodesPerNode: 150,
+        default5xxCoolDownMs: 60 * 1000, // 1分钟
+        max429CoolDownMs: 60 * 60 * 1000, // 1小时
     };
 
     constructor(providerPools, options = {}) {
@@ -80,7 +91,16 @@ export class ProviderPoolManager {
         
         // 用于并发选点时的原子排序辅助（自增序列）
         this._selectionSequence = 0;
- 
+
+        // 会话粘连配置初始化
+        this.sessionAffinityConfig = {
+            ...ProviderPoolManager.DEFAULT_SESSION_AFFINITY_CONFIG,
+            ...(options.globalConfig?.sessionAffinity || {})
+        };
+        this.sessionAffinity = new SessionAffinityMap(this.sessionAffinityConfig);
+        this.consistentHashRings = new Map();
+        this._setupPeriodicCleanup();
+
         this.initializeProviderStatus();
     }
 
@@ -726,6 +746,10 @@ export class ProviderPoolManager {
                     logger.error(`[ProviderPoolManager] Error initializing node for ${providerType}: ${nodeError.message}`);
                 }
             });
+
+            if (this.sessionAffinityConfig.sessionAffinityEnabled) {
+                this.updateConsistentHashRing(providerType);
+            }
             
             // 确保初始化时的默认值补全也能写盘
             this._debouncedSave(providerType);
@@ -734,10 +758,343 @@ export class ProviderPoolManager {
     }
 
     /**
+     * 设置定期清理过期会话的定时器
+     * @private
+     */
+    _setupPeriodicCleanup() {
+        if (!this.sessionAffinityConfig.sessionAffinityEnabled) {
+            return;
+        }
+        // 每5分钟清理一次过期会话
+        this.cleanupTimer = setInterval(() => {
+            this.cleanupExpiredSessions();
+        }, 5 * 60 * 1000);
+
+        // 防止定时器保持进程存活
+        this.cleanupTimer.unref();
+    }
+
+    /**
+     * 更新一致性哈希环（当节点健康状态变化时调用）
+     * @param {string} providerType - 提供商类型
+     */
+    updateConsistentHashRing(providerType) {
+        if (!this.sessionAffinityConfig.sessionAffinityEnabled) {
+            return;
+        }
+        const healthyNodes = this.getHealthyNodes(providerType);
+        const nodes = healthyNodes.map(p => p.config.uuid);
+        this.consistentHashRings.set(
+            providerType,
+            new ConsistentHashRing(nodes, this.sessionAffinityConfig.virtualNodesPerNode)
+        );
+    }
+
+    /**
+     * 获取健康节点列表
+     * @param {string} providerType - 提供商类型
+     * @returns {Array} 健康节点数组
+     */
+    getHealthyNodes(providerType) {
+        const providers = this.providerStatus[providerType] || [];
+        return providers.filter(p =>
+            p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh && !this.refreshingUuids.has(p.uuid)
+        );
+    }
+
+    /**
+     * 提取会话键
+     * @param {Object} requestBody - 请求体
+     * @param {string} providerType - 提供商类型
+     * @param {string} model - 模型名称
+     * @param {Object} options - 选项，包含 apiKey, ip, userAgent
+     * @returns {string|null} 会话键，null表示无会话键
+     */
+    extractSessionKey(requestBody, providerType, model, options = {}) {
+        // P0: 请求体中的顶级会话ID
+        const p0Fields = ['conversation_id', 'conversationId', 'session_id', 'sessionId', 'response_id'];
+        for (const field of p0Fields) {
+            if (requestBody[field]) {
+                return `p0:${requestBody[field]}`;
+            }
+        }
+
+        // P0: metadata 中的会话ID
+        if (requestBody.metadata?.conversation_id) {
+            return `p0:${requestBody.metadata.conversation_id}`;
+        }
+        if (requestBody.metadata?.session_id) {
+            return `p0:${requestBody.metadata.session_id}`;
+        }
+
+        // P1: 父响应ID / 前一个响应ID（延续对话）
+        if (requestBody.previous_response_id) {
+            return `p1:${requestBody.previous_response_id}`;
+        }
+        if (requestBody.parentResponseId) {
+            return `p1:${requestBody.parentResponseId}`;
+        }
+
+        // P2: 基于 API key + IP + UA + provider + model 的哈希（弱信号）
+        const { apiKey = '', ip = '', userAgent = '' } = options;
+        if (!apiKey && !ip && !userAgent) {
+            // 没有足够信息生成弱信号，返回 null 使用一致性hash
+            return null;
+        }
+
+        const composite = `${apiKey}:${ip}:${userAgent}:${providerType}:${model}`;
+        // 简单哈希计算
+        let hash = 0;
+        for (let i = 0; i < composite.length; i++) {
+            hash = ((hash << 5) - hash) + composite.charCodeAt(i);
+            hash |= 0; // 转换为32位整数
+        }
+        return `p2:${Math.abs(hash).toString(16)}`;
+    }
+
+    /**
+     * 根据错误状态码计算冷却截止时间
+     * @param {number} statusCode - HTTP状态码
+     * @param {Object} providerConfig - 提供商配置，包含之前的冷却信息
+     * @returns {number|null} 冷却截止时间戳，null表示不冷却
+     */
+    calculateCoolingDeadline(statusCode, providerConfig = {}) {
+        const now = Date.now();
+
+        switch (statusCode) {
+            case 400:
+                // 400 参数错误，不冷却（客户端错误，不是节点问题）
+                return null;
+
+            case 429: {
+                // 429 限流：指数退避 1min → 2min → 4min → 最大 1小时
+                const baseDuration = 60 * 1000;
+                const previousDuration = providerConfig.lastCoolDownDuration || 0;
+                const nextDuration = Math.min(
+                    previousDuration > 0 ? previousDuration * 2 : baseDuration,
+                    this.sessionAffinityConfig.max429CoolDownMs
+                );
+                return now + nextDuration;
+            }
+
+            case 402:
+                // 402 余额不足/配额耗尽：冷却到次日 UTC 0点
+                const tomorrow = new Date(now);
+                tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+                tomorrow.setUTCHours(0, 0, 0, 0);
+                return tomorrow.getTime();
+
+            case 401:
+            case 403:
+                // 认证失败：永久冷却
+                return Infinity;
+
+            case 500:
+            case 502:
+            case 503:
+            case 504:
+                // 服务端错误：固定冷却时间
+                return now + this.sessionAffinityConfig.default5xxCoolDownMs;
+
+            default:
+                // 默认不冷却
+                return null;
+        }
+    }
+
+    /**
+     * 清理会话中过期的冷却节点记录
+     * @param {object|null} session - 会话数据
+     * @param {number} [now] - 当前时间戳
+     */
+    _pruneSessionCooling(session, now = Date.now()) {
+        if (!session?.cooling || !(session.cooling instanceof Map)) {
+            return;
+        }
+
+        for (const [uuid, deadline] of session.cooling.entries()) {
+            if (Number.isFinite(deadline) && deadline <= now) {
+                session.cooling.delete(uuid);
+            }
+        }
+    }
+
+    /**
+     * 记录会话失败，触发冷却并迁移到其他节点
+     * @param {string} sessionKey - 会话键
+     * @param {string} currentUuid - 当前节点UUID
+     * @param {number} statusCode - HTTP状态码
+     * @param {number} failureCount - 失败次数
+     */
+    recordSessionFailure(sessionKey, currentUuid, statusCode, failureCount = 1) {
+        if (!this.sessionAffinityConfig.sessionAffinityEnabled || !sessionKey) {
+            return;
+        }
+
+        const session = this.sessionAffinity.get(sessionKey);
+        if (!session) {
+            return;
+        }
+
+        const now = Date.now();
+        this._pruneSessionCooling(session, now);
+
+        // 找到 provider 配置
+        const providerType = session.providerType;
+        let providerConfig = null;
+        if (this.providerStatus[providerType]) {
+            providerConfig = this.providerStatus[providerType].find(
+                p => p.config.uuid === currentUuid
+            )?.config;
+        }
+
+        const deadline = this.calculateCoolingDeadline(statusCode, providerConfig);
+
+        if (deadline !== null) {
+            const cooling = session.cooling instanceof Map ? session.cooling : new Map();
+            cooling.set(currentUuid, deadline);
+            session.cooling = cooling;
+        }
+
+        if (deadline !== null && providerConfig) {
+            // 保存上次冷却时长用于指数退避
+            if (statusCode === 429 && Number.isFinite(deadline)) {
+                providerConfig.lastCoolDownDuration = Math.max(0, deadline - now);
+            }
+
+            const reason = `Session affinity cooldown after status ${statusCode}`;
+            if (deadline === Infinity) {
+                this.markProviderUnhealthyImmediately(providerType, providerConfig, reason);
+            } else {
+                this.markProviderUnhealthyWithRecoveryTime(providerType, providerConfig, reason, deadline);
+            }
+
+            const cooldownLabel = deadline === Infinity
+                ? 'permanently'
+                : `until ${new Date(deadline).toISOString()}`;
+            logger.debug(`[SessionAffinity] Node ${currentUuid} cooled ${cooldownLabel} for session ${sessionKey} due to status ${statusCode}`);
+        }
+
+        // 清除当前绑定，下次选择新节点
+        session.boundUuid = null;
+        session.lastAccessed = now;
+        this.sessionAffinity.set(sessionKey, session);
+    }
+
+    /**
+     * 清理过期会话
+     */
+    cleanupExpiredSessions() {
+        if (!this.sessionAffinityConfig.sessionAffinityEnabled) {
+            return;
+        }
+        const before = this.sessionAffinity.size;
+        const removed = this.sessionAffinity.cleanupExpired();
+        if (removed > 0) {
+            logger.debug(`[SessionAffinity] Cleaned up ${removed} expired sessions, ${this.sessionAffinity.size} remaining`);
+        }
+    }
+
+    /**
+     * 根据会话键选择节点
+     * @param {string} providerType - 提供商类型
+     * @param {string} sessionKey - 会话键
+     * @returns {string|null} 选中的节点UUID，null表示无可用节点
+     */
+    selectNodeForSession(providerType, sessionKey) {
+        if (!this.sessionAffinityConfig.sessionAffinityEnabled || !sessionKey) {
+            return null;
+        }
+
+        const session = this.sessionAffinity.get(sessionKey);
+        const now = Date.now();
+        this._pruneSessionCooling(session, now);
+        const healthyNodes = this.getHealthyNodes(providerType);
+
+        // 检查是否有已绑定且未冷却的节点
+        if (session && session.boundUuid) {
+            const isStillHealthy = healthyNodes.some(
+                p => p.config.uuid === session.boundUuid
+            );
+
+            // 检查该节点是否正在冷却
+            let isCooled = false;
+            if (session.cooling && session.cooling.has(session.boundUuid)) {
+                const coolDeadline = session.cooling.get(session.boundUuid);
+                if (coolDeadline > now) {
+                    isCooled = true;
+                }
+            }
+
+            if (!isCooled && isStillHealthy) {
+                logger.debug(`[SessionAffinity] Reusing bound node ${session.boundUuid} for session ${sessionKey}`);
+                this.sessionAffinity.touch(sessionKey);
+                return session.boundUuid;
+            }
+
+            // 不健康或已冷却，移除绑定
+            session.boundUuid = null;
+            this.sessionAffinity.set(sessionKey, session);
+        }
+
+        // 一致性哈希选择
+        const ring = this.consistentHashRings.get(providerType);
+        if (!ring) {
+            return null;
+        }
+
+        let selected = ring.getNode(sessionKey);
+        if (!selected) {
+            return null;
+        }
+
+        // 如果选中的节点不健康或正在冷却，尝试找下一个
+        let attempts = 0;
+        const maxAttempts = Math.max(healthyNodes.length, 1);
+        while (attempts < maxAttempts) {
+            const isHealthy = healthyNodes.some(p => p.config.uuid === selected);
+
+            // 检查是否冷却
+            let isCooled = false;
+            if (session?.cooling && session.cooling.has(selected)) {
+                const coolDeadline = session.cooling.get(selected);
+                if (coolDeadline > now) {
+                    isCooled = true;
+                }
+            }
+
+            if (!isCooled && isHealthy) {
+                break;
+            }
+
+            selected = ring.getNextNode(sessionKey, selected);
+            attempts++;
+            if (!selected) {
+                break;
+            }
+        }
+
+        // 绑定会话到选中节点
+        if (selected) {
+            const existingSession = session || {};
+            this.sessionAffinity.set(sessionKey, {
+                boundUuid: selected,
+                providerType: providerType,
+                createdAt: existingSession.createdAt || now,
+                lastAccessed: now,
+                cooling: existingSession.cooling instanceof Map ? existingSession.cooling : new Map()
+            });
+            logger.debug(`[SessionAffinity] Bound session ${sessionKey} to node ${selected}`);
+        }
+
+        return selected;
+    }
+
+    /**
      * 获取一个可用的提供商插槽，考虑并发限制和队列
-     * @param {string} providerType 
-     * @param {string} requestedModel 
-     * @param {object} options 
+     * @param {string} providerType
+     * @param {string} requestedModel
+     * @param {object} options
      */
     async acquireSlot(providerType, requestedModel = null, options = {}) {
         // 使用 selectProvider 进行初次选择（评分逻辑已经包含了并发考虑）
@@ -870,15 +1227,36 @@ export class ProviderPoolManager {
      * 实际执行 provider 选择的内部方法（同步执行，由锁保护）
      * @private
      */
-    _doSelectProvider(providerType, requestedModel, options) {
+    _doSelectProvider(providerType, requestedModel, options = {}) {
         const availableProviders = this.providerStatus[providerType] || [];
-        
+
         // 检查并恢复已到恢复时间的提供商
         this._checkAndRecoverScheduledProviders(providerType);
-        
+
         // 获取固定时间戳，确保排序过程中一致
         const now = Date.now();
-        
+        const { sessionKey } = options;
+
+        // 会话粘连：优先使用已绑定的会话节点
+        if (this.sessionAffinityConfig.sessionAffinityEnabled && sessionKey) {
+            const sessionSelectedUuid = this.selectNodeForSession(providerType, sessionKey);
+            if (sessionSelectedUuid) {
+                const selectedProvider = availableProviders.find(p => p.config.uuid === sessionSelectedUuid);
+                if (selectedProvider && selectedProvider.config.isHealthy) {
+                    // 更新选择序列号和最后使用时间
+                    this._selectionSequence++;
+                    selectedProvider.config._lastSelectionSeq = this._selectionSequence;
+                    selectedProvider.config.lastUsed = new Date().toISOString();
+                    if (!options.skipUsageCount) {
+                        selectedProvider.config.usageCount++;
+                    }
+                    this._debouncedSave(providerType);
+                    this._log('debug', `[SessionAffinity] Selected by affinity: ${sessionSelectedUuid} for ${providerType}`);
+                    return selectedProvider.config;
+                }
+            }
+        }
+
         // 提前计算池中最小序列号，避免在排序算法中重复 O(N) 计算
         const minSeq = Math.min(...availableProviders.map(p => p.config._lastSelectionSeq || 0));
 
@@ -1466,7 +1844,12 @@ export class ProviderPoolManager {
 
             if (this.maxErrorCount > 0 && provider.config.errorCount >= this.maxErrorCount) {
                 provider.config.isHealthy = false;
-                
+
+                // 更新一致性哈希环（健康状态变化）
+                if (this.sessionAffinityConfig.sessionAffinityEnabled) {
+                    this.updateConsistentHashRing(providerType);
+                }
+
                 // 健康状态变化日志
                 if (wasHealthy) {
                     this._logHealthStatusChange(providerType, provider.config, 'healthy', 'unhealthy', errorMessage);
@@ -1511,6 +1894,10 @@ export class ProviderPoolManager {
                 this._logHealthStatusChange(providerType, provider.config, 'healthy', 'unhealthy', errorMessage);
             }
 
+            if (this.sessionAffinityConfig.sessionAffinityEnabled) {
+                this.updateConsistentHashRing(providerType);
+            }
+
             this._log('warn', `Immediately marked provider as unhealthy: ${providerConfig.uuid} for type ${providerType}. Reason: ${errorMessage || 'Authentication error'}`);
            
             this._debouncedSave(providerType);
@@ -1523,7 +1910,7 @@ export class ProviderPoolManager {
      * @param {string} providerType - The type of the provider.
      * @param {object} providerConfig - The configuration of the provider to mark.
      * @param {string} [errorMessage] - Optional error message to store.
-     * @param {Date|string} [recoveryTime] - Optional recovery time when the provider should be marked healthy again.
+     * @param {Date|string|number} [recoveryTime] - Optional recovery time when the provider should be marked healthy again.
      */
     markProviderUnhealthyWithRecoveryTime(providerType, providerConfig, errorMessage = null, recoveryTime = null) {
         if (!providerConfig?.uuid) {
@@ -1533,6 +1920,7 @@ export class ProviderPoolManager {
 
         const provider = this._findProvider(providerType, providerConfig.uuid);
         if (provider) {
+            const wasHealthy = provider.config.isHealthy;
             provider.config.isHealthy = false;
             provider.config.needsRefresh = false; // 报错时不健康，清除刷新标记，防止卡死
             provider.config.refreshCount = 0;
@@ -1544,11 +1932,23 @@ export class ProviderPoolManager {
                 provider.config.lastErrorMessage = errorMessage;
             }
 
+            if (wasHealthy) {
+                this._logHealthStatusChange(providerType, provider.config, 'healthy', 'unhealthy', errorMessage);
+            }
+
+            if (this.sessionAffinityConfig.sessionAffinityEnabled) {
+                this.updateConsistentHashRing(providerType);
+            }
+
             // Set recovery time if provided
             if (recoveryTime) {
                 const recoveryDate = recoveryTime instanceof Date ? recoveryTime : new Date(recoveryTime);
-                provider.config.scheduledRecoveryTime = recoveryDate.toISOString();
-                this._log('warn', `Marked provider as unhealthy with recovery time: ${providerConfig.uuid} for type ${providerType}. Recovery at: ${recoveryDate.toISOString()}. Reason: ${errorMessage || 'Quota exhausted'}`);
+                if (Number.isNaN(recoveryDate.getTime())) {
+                    this._log('warn', `Skipped invalid recovery time for provider ${providerConfig.uuid} (${providerType}). Reason: ${errorMessage || 'Quota exhausted'}`);
+                } else {
+                    provider.config.scheduledRecoveryTime = recoveryDate.toISOString();
+                    this._log('warn', `Marked provider as unhealthy with recovery time: ${providerConfig.uuid} for type ${providerType}. Recovery at: ${recoveryDate.toISOString()}. Reason: ${errorMessage || 'Quota exhausted'}`);
+                }
             } else {
                 this._log('warn', `Marked provider as unhealthy: ${providerConfig.uuid} for type ${providerType}. Reason: ${errorMessage || 'Quota exhausted'}`);
             }
@@ -1581,13 +1981,19 @@ export class ProviderPoolManager {
             provider.config.lastErrorTime = null;
             provider.config.lastErrorMessage = null;
             provider.config._lastSelectionSeq = 0;
-            
+            provider.config.scheduledRecoveryTime = null;
+
             // 更新健康检测信息
             if (healthCheckModel) {
                 provider.config.lastHealthCheckTime = new Date().toISOString();
                 provider.config.lastHealthCheckModel = healthCheckModel;
             }
-            
+
+            // 更新一致性哈希环（健康状态变化）
+            if (this.sessionAffinityConfig.sessionAffinityEnabled) {
+                this.updateConsistentHashRing(providerType);
+            }
+
             // 只有在明确要求重置使用计数时才重置
             if (resetUsageCount) {
                 provider.config.usageCount = 0;
@@ -1595,12 +2001,12 @@ export class ProviderPoolManager {
                 provider.config.usageCount++;
                 provider.config.lastUsed = new Date().toISOString();
             }
-            
+
             // 健康状态变化日志
             if (!wasHealthy) {
                 this._logHealthStatusChange(providerType, provider.config, 'unhealthy', 'healthy', null);
             }
-            
+
             this._log('info', `Marked provider as healthy: ${provider.config.uuid} for type ${providerType}${resetUsageCount ? ' (usage count reset)' : ''}`);
             
             this._debouncedSave(providerType);
@@ -1750,6 +2156,7 @@ export class ProviderPoolManager {
         
         for (const type of typesToCheck) {
             const providers = this.providerStatus[type] || [];
+            let recoveredAny = false;
             for (const providerStatus of providers) {
                 const config = providerStatus.config;
                 
@@ -1762,14 +2169,20 @@ export class ProviderPoolManager {
                         // 恢复健康状态
                         config.isHealthy = true;
                         config.errorCount = 0;
+                        config._lastSelectionSeq = 0;
                         config.lastErrorTime = null;
                         config.lastErrorMessage = null;
                         config.scheduledRecoveryTime = null; // 清除恢复时间
+                        recoveredAny = true;
                         
                         // 保存更改
                         this._debouncedSave(type);
                     }
                 }
+            }
+
+            if (recoveredAny && this.sessionAffinityConfig.sessionAffinityEnabled) {
+                this.updateConsistentHashRing(type);
             }
         }
     }
@@ -2190,4 +2603,262 @@ export class ProviderPoolManager {
     }
 
 }
+
+/**
+ * 一致性哈希环实现
+ * 每个物理节点对应多个虚拟节点，减少分布不均匀
+ */
+class ConsistentHashRing {
+    constructor(nodes = [], virtualNodesPerNode = 150) {
+        this.virtualNodesPerNode = virtualNodesPerNode;
+        this.ring = new Map(); // 哈希值 => 节点UUID
+        this.sortedHashes = []; // 排序的哈希值数组
+        this.nodeSet = new Set(nodes);
+
+        this.buildRing(nodes);
+    }
+
+    /**
+     * 计算字符串的32位哈希值（基于djb2算法）
+     * @param {string} key - 输入键
+     * @returns {number} 哈希值
+     */
+    _hash(key) {
+        return crypto.createHash('md5').update(key).digest().readUInt32BE(0);
+    }
+
+    /**
+     * 构建哈希环
+     * @param {Array<string>} nodes - 节点数组
+     */
+    buildRing(nodes) {
+        this.ring.clear();
+        this.sortedHashes = [];
+
+        for (const node of nodes) {
+            for (let i = 0; i < this.virtualNodesPerNode; i++) {
+                const hash = this._hash(`${node}#${i}`);
+                this.ring.set(hash, node);
+                this.sortedHashes.push(hash);
+            }
+        }
+
+        this.sortedHashes.sort((a, b) => a - b);
+    }
+
+    /**
+     * 添加节点
+     * @param {string} node - 节点UUID
+     */
+    addNode(node) {
+        if (this.nodeSet.has(node)) {
+            return;
+        }
+        this.nodeSet.add(node);
+        for (let i = 0; i < this.virtualNodesPerNode; i++) {
+            const hash = this._hash(`${node}#${i}`);
+            this.ring.set(hash, node);
+            this.sortedHashes.push(hash);
+        }
+        this.sortedHashes.sort((a, b) => a - b);
+    }
+
+    /**
+     * 根据键获取节点
+     * @param {string} key - 会话键
+     * @returns {string|null} 节点UUID
+     */
+    getNode(key) {
+        if (this.sortedHashes.length === 0) {
+            return null;
+        }
+
+        const hash = this._hash(key);
+        // 二分查找第一个大于等于哈希值的位置
+        let low = 0;
+        let high = this.sortedHashes.length - 1;
+
+        if (hash > this.sortedHashes[high]) {
+            // 环形回绕
+            return this.ring.get(this.sortedHashes[0]);
+        }
+
+        while (low < high) {
+            const mid = Math.floor((low + high) / 2);
+            if (this.sortedHashes[mid] < hash) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+
+        return this.ring.get(this.sortedHashes[low]);
+    }
+
+    /**
+     * 获取下一个节点（用于跳过冷却节点）
+     * @param {string} key - 会话键
+     * @param {string} currentNode - 当前节点
+     * @returns {string|null} 下一个节点
+     */
+    getNextNode(key, currentNode) {
+        if (this.sortedHashes.length <= 1) {
+            return null;
+        }
+
+        const hash = this._hash(key);
+        let low = 0;
+        let high = this.sortedHashes.length - 1;
+
+        if (hash > this.sortedHashes[high]) {
+            // 找第二个，因为第一个是currentNode
+            return this.ring.get(this.sortedHashes[1]);
+        }
+
+        while (low < high) {
+            const mid = Math.floor((low + high) / 2);
+            if (this.sortedHashes[mid] < hash) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+
+        // 找到下一个位置
+        let nextPos = low + 1;
+        if (nextPos >= this.sortedHashes.length) {
+            nextPos = 0;
+        }
+
+        // 如果下一个还是同一个节点，继续找
+        while (nextPos !== low) {
+            const node = this.ring.get(this.sortedHashes[nextPos]);
+            if (node !== currentNode) {
+                return node;
+            }
+            nextPos++;
+            if (nextPos >= this.sortedHashes.length) {
+                nextPos = 0;
+            }
+        }
+
+        return null;
+    }
+}
+
+/**
+ * 会话粘连映射表
+ * 支持 TTL 过期、惰性清理、LRU 淘汰
+ */
+class SessionAffinityMap {
+    constructor(options = {}) {
+        this.ttlMs = options.defaultWeakTtlMs || 30 * 60 * 1000;
+        this.maxSize = options.maxSessions || 10000;
+        this.sessions = new Map(); // sessionKey => sessionData
+    }
+
+    /**
+     * 获取会话大小
+     * @returns {number}
+     */
+    get size() {
+        return this.sessions.size;
+    }
+
+    /**
+     * 获取会话，同时更新访问时间
+     * @param {string} key - 会话键
+     * @returns {Object|null} 会话数据
+     */
+    get(key) {
+        const session = this.sessions.get(key);
+        if (!session) {
+            return null;
+        }
+
+        // 检查是否过期（只有P2有TTL，P0永远不过期）
+        // P0格式: p0:..., P2格式: p2:...
+        const isWeak = key.startsWith('p2:');
+        if (isWeak) {
+            const now = Date.now();
+            if (now - session.lastAccessed > this.ttlMs) {
+                this.sessions.delete(key);
+                return null;
+            }
+        }
+
+        // 更新访问时间
+        session.lastAccessed = Date.now();
+        return session;
+    }
+
+    /**
+     * 更新最后访问时间（touch）
+     * @param {string} key - 会话键
+     */
+    touch(key) {
+        const session = this.sessions.get(key);
+        if (session) {
+            session.lastAccessed = Date.now();
+        }
+    }
+
+    /**
+     * 设置会话
+     * @param {string} key - 会话键
+     * @param {Object} data - 会话数据
+     */
+    set(key, data) {
+        // 如果超过最大大小，惰性删除最旧的10%
+        if (this.sessions.size >= this.maxSize) {
+            this._evictLRU(Math.floor(this.maxSize * 0.1));
+        }
+
+        this.sessions.set(key, data);
+    }
+
+    /**
+     * 删除会话
+     * @param {string} key - 会话键
+     */
+    remove(key) {
+        this.sessions.delete(key);
+    }
+
+    /**
+     * LRU淘汰：删除最旧未访问的会话
+     * @param {number} count - 要删除的数量
+     */
+    _evictLRU(count) {
+        const entries = Array.from(this.sessions.entries());
+        // 按最后访问时间排序（升序，最旧在前）
+        entries.sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);
+
+        for (let i = 0; i < count && i < entries.length; i++) {
+            this.sessions.delete(entries[i][0]);
+        }
+    }
+
+    /**
+     * 清理所有过期会话
+     * @returns {number} 清理的数量
+     */
+    cleanupExpired() {
+        const now = Date.now();
+        let removed = 0;
+
+        for (const [key, session] of this.sessions.entries()) {
+            // 只有弱粘连会话需要检查过期
+            if (key.startsWith('p2:') && now - session.lastAccessed > this.ttlMs) {
+                this.sessions.delete(key);
+                removed++;
+            }
+        }
+
+        return removed;
+    }
+}
+
+// 导出内部类供测试
+export { ConsistentHashRing, SessionAffinityMap };
 

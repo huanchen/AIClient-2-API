@@ -305,6 +305,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
     const maxRetries = retryContext?.maxRetries ?? 5;
     const currentRetry = retryContext?.currentRetry ?? 0;
     const CONFIG = retryContext?.CONFIG;
+    const sessionKey = retryContext?.sessionKey ?? null;
     const isRetry = currentRetry > 0;
     
     // 使用共享的 clientDisconnected 状态（如果是重试，继承上层的状态）
@@ -505,10 +506,15 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             responseClosed = true;
             return;
         }
-        
+
         // 获取状态码（用于日志记录，不再用于判断是否重试）
         const status = error.response?.status;
-        
+
+        // 会话粘连：如果会话粘连启用且有 sessionKey，记录失败触发冷却
+        if (providerPoolManager?.sessionAffinityConfig?.sessionAffinityEnabled && typeof sessionKey !== 'undefined' && sessionKey && pooluuid && status) {
+            providerPoolManager.recordSessionFailure(sessionKey, pooluuid, status, currentRetry + 1);
+        }
+
         // 检查是否应该跳过错误计数（用于 429/5xx 等需要直接切换凭证的情况）
         const skipErrorCount = error.skipErrorCount === true;
         // 检查是否应该切换凭证（用于 429/5xx/402/403 等情况）
@@ -549,7 +555,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                 // 动态导入以避免循环依赖
                 const { getApiServiceWithFallback } = await import('../services/service-manager.js');
                 // 使用 acquireSlot: true 以占用新凭证的并发插槽
-                const result = await getApiServiceWithFallback(CONFIG, model, { acquireSlot: true });
+                const result = await getApiServiceWithFallback(CONFIG, model, { acquireSlot: true, sessionKey });
                 
                 if (result && result.service) {
                     logger.info(`[Stream Retry] Switched to new credential: ${result.uuid} (provider: ${result.actualProviderType})`);
@@ -560,6 +566,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                         CONFIG,
                         currentRetry: currentRetry + 1,
                         maxRetries,
+                        sessionKey,
                         clientDisconnected,  // 传递断开状态
                         anyDataSent          // 传递数据发送状态
                     };
@@ -660,6 +667,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
     const maxRetries = retryContext?.maxRetries ?? 5;
     const currentRetry = retryContext?.currentRetry ?? 0;
     const CONFIG = retryContext?.CONFIG;
+    const sessionKey = retryContext?.sessionKey ?? null;
     
     try{
         // The service returns the response in its native format (toProvider).
@@ -710,6 +718,11 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         
         // 获取状态码（用于日志记录，不再用于判断是否重试）
         const status = error.response?.status;
+
+        // 会话粘连：如果会话粘连启用且有 sessionKey，记录失败触发冷却
+        if (providerPoolManager?.sessionAffinityConfig?.sessionAffinityEnabled && sessionKey && pooluuid && status) {
+            providerPoolManager.recordSessionFailure(sessionKey, pooluuid, status, currentRetry + 1);
+        }
         
         // 检查是否应该跳过错误计数（用于 429/5xx 等需要直接切换凭证的情况）
         const skipErrorCount = error.skipErrorCount === true;
@@ -751,7 +764,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                 // 动态导入以避免循环依赖
                 const { getApiServiceWithFallback } = await import('../services/service-manager.js');
                 // 使用 acquireSlot: true 以占用新凭证的并发插槽
-                const result = await getApiServiceWithFallback(CONFIG, model, { acquireSlot: true });
+                const result = await getApiServiceWithFallback(CONFIG, model, { acquireSlot: true, sessionKey });
                 
                 if (result && result.service) {
                     logger.info(`[Unary Retry] Switched to new credential: ${result.uuid} (provider: ${result.actualProviderType})`);
@@ -761,7 +774,8 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                         ...retryContext,
                         CONFIG,
                         currentRetry: currentRetry + 1,
-                        maxRetries
+                        maxRetries,
+                        sessionKey
                     };
                     
                     // 递归调用，使用新的服务
@@ -954,6 +968,26 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     }
     logger.info(`[Content Generation] Model: ${model}, Stream: ${isStream}`);
 
+    // 提取会话键（用于会话粘连）
+    let sessionKey = null;
+    if (providerPoolManager?.sessionAffinityConfig?.sessionAffinityEnabled) {
+        // 从请求头提取 API key
+        let apiKey = null;
+        const authHeader = req.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            apiKey = authHeader.slice(7);
+        }
+        const clientIp = req.ip || req.socket?.remoteAddress;
+        const userAgent = req.headers['user-agent'] || '';
+
+        sessionKey = providerPoolManager.extractSessionKey(
+            originalRequestBody,
+            CONFIG.MODEL_PROVIDER,
+            model,
+            { apiKey, ip: clientIp, userAgent }
+        );
+    }
+
     let actualCustomName = CONFIG.customName;
 
     // 2.5. 根据模型选择服务适配器：
@@ -963,7 +997,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     const shouldSelectByPool = providerPoolManager && (CONFIG.MODEL_PROVIDER === MODEL_PROVIDER.AUTO || (CONFIG.providerPools && CONFIG.providerPools[CONFIG.MODEL_PROVIDER]));
     if (!service || shouldSelectByPool) {
         const { getApiServiceWithFallback } = await import('../services/service-manager.js');
-        const result = await getApiServiceWithFallback(CONFIG, model, { acquireSlot: shouldSelectByPool });
+        const result = await getApiServiceWithFallback(CONFIG, model, { acquireSlot: shouldSelectByPool, sessionKey });
 
         service = result.service;
         toProvider = result.actualProviderType;
@@ -1025,7 +1059,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     // - 凭证切换重试：凭证被标记不健康后切换到其他凭证
     // 当没有不同的健康凭证可用时，重试会自动停止
     const credentialSwitchMaxRetries = CONFIG.CREDENTIAL_SWITCH_MAX_RETRIES || 5;
-    const retryContext = { CONFIG, currentRetry: 0, maxRetries: credentialSwitchMaxRetries };
+    const retryContext = { CONFIG, currentRetry: 0, maxRetries: credentialSwitchMaxRetries, sessionKey };
     
     if (isStream) {
         await handleStreamRequest(res, service, model, processedRequestBody, fromProvider, toProvider, CONFIG.PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, actualUuid, actualCustomName, retryContext);
