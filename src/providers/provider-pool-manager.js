@@ -7,7 +7,9 @@ import { convertData } from '../convert/convert.js';
 import {
     getConfiguredSupportedModels,
     getProviderModels,
-    normalizeModelIds
+    normalizeModelIds,
+    providerSupportsModel,
+    toPublicProviderModelList
 } from './provider-models.js';
 import { broadcastEvent } from '../ui-modules/event-broadcast.js';
 import { ENDPOINT_TYPE } from '../utils/common.js';
@@ -1269,14 +1271,14 @@ export class ProviderPoolManager {
             const modelFilteredProviders = availableAndHealthyProviders.filter(p => {
                 const supportedModels = getConfiguredSupportedModels(providerType, p.config);
                 if (supportedModels.length > 0) {
-                    return supportedModels.includes(requestedModel);
+                    return providerSupportsModel(providerType, requestedModel, supportedModels);
                 }
                 // 如果提供商没有配置 notSupportedModels，则认为它支持所有模型
                 if (!p.config.notSupportedModels || !Array.isArray(p.config.notSupportedModels)) {
                     return true;
                 }
                 // 检查 notSupportedModels 数组中是否包含请求的模型，如果包含则排除
-                return !p.config.notSupportedModels.includes(requestedModel);
+                return !providerSupportsModel(providerType, requestedModel, p.config.notSupportedModels);
             });
 
             if (modelFilteredProviders.length === 0) {
@@ -1356,7 +1358,7 @@ export class ProviderPoolManager {
                 if (primaryProtocol !== fallbackProtocol) continue;
 
                 const supportedModels = getProviderModels(currentType);
-                if (supportedModels.length > 0 && !supportedModels.includes(requestedModel)) continue;
+                if (!providerSupportsModel(currentType, requestedModel, supportedModels)) continue;
             }
 
             // 尝试获取插槽
@@ -1409,7 +1411,7 @@ export class ProviderPoolManager {
                              if (targetProtocol !== fallbackProtocol) continue;
                              
                              const supportedModels = getProviderModels(fallbackType);
-                             if (supportedModels.length > 0 && !supportedModels.includes(targetModel)) continue;
+                             if (!providerSupportsModel(fallbackType, targetModel, supportedModels)) continue;
                              
                              try {
                                 const fallbackSelectedConfig = await this.acquireSlot(fallbackType, targetModel, options);
@@ -1500,7 +1502,7 @@ export class ProviderPoolManager {
 
                 // 检查 fallback 类型是否支持请求的模型
                 const supportedModels = getProviderModels(currentType);
-                if (supportedModels.length > 0 && !supportedModels.includes(requestedModel)) {
+                if (!providerSupportsModel(currentType, requestedModel, supportedModels)) {
                     this._log('debug', `Skipping fallback type ${currentType}: model ${requestedModel} not supported`);
                     continue;
                 }
@@ -1563,10 +1565,10 @@ export class ProviderPoolManager {
                              const fallbackProtocol = getProtocolPrefix(fallbackType);
                              
                              if (targetProtocol !== fallbackProtocol) continue;
-                             
+                            
                              // 检查模型支持
                              const supportedModels = getProviderModels(fallbackType);
-                             if (supportedModels.length > 0 && !supportedModels.includes(targetModel)) continue;
+                             if (!providerSupportsModel(fallbackType, targetModel, supportedModels)) continue;
                              
                              const fallbackSelectedConfig = await this.selectProvider(fallbackType, targetModel, options);
                              if (fallbackSelectedConfig) {
@@ -1719,6 +1721,8 @@ export class ProviderPoolManager {
                         // 保持原有的 models (可能是硬编码的空列表或 getProviderModels 返回的结果)
                     }
                 }
+
+                models = toPublicProviderModelList(providerType, models);
 
                 for (const model of models) {
                     allModels.push({

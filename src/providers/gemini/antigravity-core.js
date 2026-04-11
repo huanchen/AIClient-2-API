@@ -12,7 +12,11 @@ import { v4 as uuidv4 } from 'uuid';
 import open from 'open';
 import { configureTLSSidecar } from '../../utils/proxy-utils.js';
 import { formatExpiryTime, isRetryableNetworkError, formatExpiryLog } from '../../utils/common.js';
-import { getProviderModels } from '../provider-models.js';
+import {
+    getProviderModels,
+    normalizeRequestedModelForProvider,
+    toPublicProviderModelId
+} from '../provider-models.js';
 import { handleGeminiAntigravityOAuth } from '../../auth/oauth-handlers.js';
 import { getProxyConfigForProvider, getGoogleAuthProxyConfig } from '../../utils/proxy-utils.js';
 import { cleanJsonSchemaProperties } from '../../converters/utils.js';
@@ -1042,15 +1046,16 @@ export class AntigravityApiService {
 
         const now = Math.floor(Date.now() / 1000);
         const formattedModels = this.availableModels.map(modelId => {
-            const displayName = modelId.split('-').map(word =>
+            const publicModelId = toPublicProviderModelId(MODEL_PROVIDER.ANTIGRAVITY, modelId);
+            const displayName = publicModelId.split('-').map(word =>
                 word.charAt(0).toUpperCase() + word.slice(1)
             ).join(' ');
 
             const modelInfo = {
-                name: `models/${modelId}`,
+                name: `models/${publicModelId}`,
                 version: '1.0.0',
                 displayName: displayName,
-                description: `Antigravity model: ${modelId}`,
+                description: `Antigravity model: ${publicModelId}`,
                 inputTokenLimit: 1024000,
                 outputTokenLimit: 65535,
                 supportedGenerationMethods: ['generateContent', 'streamGenerateContent'],
@@ -1329,8 +1334,9 @@ export class AntigravityApiService {
             }
         }
 
-        let selectedModel = model;
-        if (!this.availableModels.includes(model)) {
+        const requestedModel = normalizeRequestedModelForProvider(MODEL_PROVIDER.ANTIGRAVITY, model);
+        let selectedModel = requestedModel;
+        if (!this.availableModels.includes(requestedModel)) {
             logger.warn(`[Antigravity] Model '${model}' not found. Using default model: 'gemini-3-flash'`);
             selectedModel = 'gemini-3-flash';
         }
@@ -1407,8 +1413,9 @@ export class AntigravityApiService {
             }
         }
 
-        let selectedModel = model;
-        if (!this.availableModels.includes(model)) {
+        const requestedModel = normalizeRequestedModelForProvider(MODEL_PROVIDER.ANTIGRAVITY, model);
+        let selectedModel = requestedModel;
+        if (!this.availableModels.includes(requestedModel)) {
             logger.warn(`[Antigravity] Model '${model}' not found. Using default model: 'gemini-3-flash'`);
             selectedModel = 'gemini-3-flash';
         }
@@ -1498,7 +1505,10 @@ export class AntigravityApiService {
                                     continue;
                                 }
 
-                                const aliasName = modelId.startsWith('claude-') ? `gemini-${modelId}` : modelId;
+                                const aliasName = toPublicProviderModelId(
+                                    MODEL_PROVIDER.ANTIGRAVITY,
+                                    modelId.startsWith('claude-') ? `gemini-${modelId}` : modelId
+                                );
                                 
                                 const modelInfo = {
                                     remaining: 0,

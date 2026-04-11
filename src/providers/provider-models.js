@@ -125,6 +125,31 @@ export const MANAGED_MODEL_LIST_PROVIDERS = [
     'claude-custom'
 ];
 
+const ANTIGRAVITY_MODEL_ALIASES = {
+    'claude-sonnet-4-6': {
+        internal: 'gemini-claude-sonnet-4-6',
+        public: 'claude-sonnet-4-6',
+        equivalents: ['claude-sonnet-4-6', 'gemini-claude-sonnet-4-6']
+    },
+    'claude-opus-4-6': {
+        internal: 'gemini-claude-opus-4-6-thinking',
+        public: 'claude-opus-4-6',
+        equivalents: ['claude-opus-4-6', 'claude-opus-4-6-thinking', 'gemini-claude-opus-4-6-thinking']
+    }
+};
+
+const ANTIGRAVITY_MODEL_ALIAS_LOOKUP = Object.values(ANTIGRAVITY_MODEL_ALIASES).reduce((lookup, aliasConfig) => {
+    aliasConfig.equivalents.forEach(modelId => {
+        lookup[modelId] = aliasConfig;
+    });
+    return lookup;
+}, {});
+
+function isAntigravityProviderType(providerType) {
+    return providerType === MODEL_PROVIDER.ANTIGRAVITY ||
+        (typeof providerType === 'string' && providerType.startsWith(`${MODEL_PROVIDER.ANTIGRAVITY}-`));
+}
+
 export function getManagedModelListProviderType(providerType) {
     return MANAGED_MODEL_LIST_PROVIDERS.find(baseType =>
         providerType === baseType || providerType.startsWith(baseType + '-')
@@ -142,6 +167,80 @@ export function normalizeModelIds(models = []) {
             .map(model => model.trim())
             .filter(Boolean)
     )].sort((a, b) => a.localeCompare(b));
+}
+
+export function getEquivalentProviderModelIds(providerType, model) {
+    if (typeof model !== 'string') {
+        return [];
+    }
+
+    const normalizedModel = model.trim();
+    if (!normalizedModel) {
+        return [];
+    }
+
+    if (isAntigravityProviderType(providerType)) {
+        const aliasConfig = ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel];
+        if (aliasConfig) {
+            return normalizeModelIds(aliasConfig.equivalents);
+        }
+    }
+
+    return [normalizedModel];
+}
+
+export function normalizeRequestedModelForProvider(providerType, model) {
+    if (typeof model !== 'string') {
+        return model;
+    }
+
+    const normalizedModel = model.trim();
+    if (!normalizedModel) {
+        return normalizedModel;
+    }
+
+    if (isAntigravityProviderType(providerType)) {
+        return ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel]?.internal || normalizedModel;
+    }
+
+    return normalizedModel;
+}
+
+export function toPublicProviderModelId(providerType, model) {
+    if (typeof model !== 'string') {
+        return model;
+    }
+
+    const normalizedModel = model.trim();
+    if (!normalizedModel) {
+        return normalizedModel;
+    }
+
+    if (isAntigravityProviderType(providerType)) {
+        return ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel]?.public || normalizedModel;
+    }
+
+    return normalizedModel;
+}
+
+export function toPublicProviderModelList(providerType, models = []) {
+    return normalizeModelIds(
+        (Array.isArray(models) ? models : []).map(model => toPublicProviderModelId(providerType, model))
+    );
+}
+
+export function providerSupportsModel(providerType, requestedModel, supportedModels = []) {
+    if (!requestedModel) {
+        return true;
+    }
+
+    const normalizedSupportedModels = normalizeModelIds(supportedModels);
+    if (normalizedSupportedModels.length === 0) {
+        return true;
+    }
+
+    const acceptableModelIds = new Set(getEquivalentProviderModelIds(providerType, requestedModel));
+    return normalizedSupportedModels.some(modelId => acceptableModelIds.has(modelId));
 }
 
 function extractModelIdsFromListShape(modelList) {
