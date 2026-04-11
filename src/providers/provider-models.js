@@ -1,5 +1,5 @@
 import { convertData } from '../convert/convert.js';
-import { MODEL_PROVIDER } from '../utils/common.js';
+import { MODEL_PROTOCOL_PREFIX, MODEL_PROVIDER } from '../utils/constants.js';
 
 /**
  * 各提供商支持的模型列表
@@ -125,6 +125,185 @@ export const MANAGED_MODEL_LIST_PROVIDERS = [
     'claude-custom'
 ];
 
+const CLAUDE_PROTOCOL_MODEL_ALIASES = {
+    'claude-sonnet-4-6': [
+        'claude-sonnet-4-6',
+        'claude-sonnet-4.6',
+        'gemini-claude-sonnet-4-6',
+        'default',
+        'default (recommended)',
+        'sonnet',
+        'sonnet (1m context)',
+        'sonnet-1m',
+        'sonnet 1m',
+        'claude-sonnet-4-6-1m',
+        'claude-sonnet-4.6-1m'
+    ],
+    'claude-opus-4-6': [
+        'claude-opus-4-6',
+        'claude-opus-4.6',
+        'claude-opus-4-6-thinking',
+        'claude-opus-4.6-thinking',
+        'gemini-claude-opus-4-6-thinking',
+        'opus',
+        'opus (1m context)',
+        'opus-1m',
+        'opus 1m',
+        'claude-opus-4-6-1m',
+        'claude-opus-4.6-1m'
+    ],
+    'claude-haiku-4-5': [
+        'claude-haiku-4-5',
+        'claude-haiku-4.5',
+        'claude-haiku-4-5-20251001',
+        'haiku'
+    ],
+    'claude-sonnet-4-5': [
+        'claude-sonnet-4-5',
+        'claude-sonnet-4.5',
+        'claude-sonnet-4-5-20250929',
+        'claude-sonnet-4-20250514'
+    ],
+    'claude-opus-4-5': [
+        'claude-opus-4-5',
+        'claude-opus-4.5',
+        'claude-opus-4-5-20251101'
+    ]
+};
+
+const CLAUDE_PROVIDER_MODEL_ALIASES = {
+    'claude-sonnet-4-6': [
+        'claude-sonnet-4-6',
+        'claude-sonnet-4.6',
+        'gemini-claude-sonnet-4-6',
+        'sonnet (1m context)',
+        'sonnet-1m',
+        'sonnet 1m',
+        'claude-sonnet-4-6-1m',
+        'claude-sonnet-4.6-1m'
+    ],
+    'claude-opus-4-6': [
+        'claude-opus-4-6',
+        'claude-opus-4.6',
+        'claude-opus-4-6-thinking',
+        'claude-opus-4.6-thinking',
+        'gemini-claude-opus-4-6-thinking',
+        'opus (1m context)',
+        'opus-1m',
+        'opus 1m',
+        'claude-opus-4-6-1m',
+        'claude-opus-4.6-1m'
+    ],
+    'claude-haiku-4-5': [
+        'claude-haiku-4-5',
+        'claude-haiku-4.5',
+        'claude-haiku-4-5-20251001'
+    ],
+    'claude-sonnet-4-5': [
+        'claude-sonnet-4-5',
+        'claude-sonnet-4.5',
+        'claude-sonnet-4-5-20250929',
+        'claude-sonnet-4-20250514'
+    ],
+    'claude-opus-4-5': [
+        'claude-opus-4-5',
+        'claude-opus-4.5',
+        'claude-opus-4-5-20251101'
+    ]
+};
+
+const CODEX_PROTOCOL_MODEL_ALIASES = {
+    'gpt-5.3-codex': [
+        'gpt-5.3-codex',
+        'gpt-5.3-codex (default)'
+    ],
+    'gpt-5.4': [
+        'gpt-5.4',
+        'gpt-5.4 (current)'
+    ]
+};
+
+function normalizeAliasLookupKey(model) {
+    if (typeof model !== 'string') {
+        return '';
+    }
+
+    return model
+        .trim()
+        .toLowerCase()
+        .replace(/[✔✓]/g, '')
+        .replace(/\s*·.*$/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function createAliasLookup(aliasMap) {
+    return Object.entries(aliasMap).reduce((lookup, [canonicalModel, aliases]) => {
+        const uniqueAliases = new Set([canonicalModel, ...(aliases || [])]);
+        uniqueAliases.forEach(alias => {
+            const normalizedKey = normalizeAliasLookupKey(alias);
+            if (normalizedKey) {
+                lookup[normalizedKey] = canonicalModel;
+            }
+        });
+        return lookup;
+    }, {});
+}
+
+const CLAUDE_PROTOCOL_MODEL_ALIAS_LOOKUP = createAliasLookup(CLAUDE_PROTOCOL_MODEL_ALIASES);
+const CLAUDE_PROVIDER_MODEL_ALIAS_LOOKUP = createAliasLookup(CLAUDE_PROVIDER_MODEL_ALIASES);
+const CODEX_PROTOCOL_MODEL_ALIAS_LOOKUP = createAliasLookup(CODEX_PROTOCOL_MODEL_ALIASES);
+
+function normalizeClaudeProtocolModel(model) {
+    const normalizedModel = typeof model === 'string' ? model.trim() : model;
+    if (typeof normalizedModel !== 'string' || !normalizedModel) {
+        return normalizedModel;
+    }
+
+    return CLAUDE_PROTOCOL_MODEL_ALIAS_LOOKUP[normalizeAliasLookupKey(normalizedModel)] || normalizedModel;
+}
+
+function normalizeClaudeProviderModel(model) {
+    const normalizedModel = typeof model === 'string' ? model.trim() : model;
+    if (typeof normalizedModel !== 'string' || !normalizedModel) {
+        return normalizedModel;
+    }
+
+    return CLAUDE_PROVIDER_MODEL_ALIAS_LOOKUP[normalizeAliasLookupKey(normalizedModel)] || normalizedModel;
+}
+
+function normalizeCodexProtocolModel(model) {
+    const normalizedModel = typeof model === 'string' ? model.trim() : model;
+    if (typeof normalizedModel !== 'string' || !normalizedModel) {
+        return normalizedModel;
+    }
+
+    return CODEX_PROTOCOL_MODEL_ALIAS_LOOKUP[normalizeAliasLookupKey(normalizedModel)] || normalizedModel;
+}
+
+export function normalizeRequestedModelForProtocol(protocol, model) {
+    if (typeof model !== 'string') {
+        return model;
+    }
+
+    const normalizedModel = model.trim();
+    if (!normalizedModel) {
+        return normalizedModel;
+    }
+
+    switch (protocol) {
+        case MODEL_PROTOCOL_PREFIX.CLAUDE:
+            return normalizeClaudeProtocolModel(normalizedModel);
+        case MODEL_PROTOCOL_PREFIX.OPENAI:
+        case MODEL_PROTOCOL_PREFIX.OPENAI_RESPONSES:
+        case 'openai_responses':
+        case MODEL_PROTOCOL_PREFIX.CODEX:
+            return normalizeCodexProtocolModel(normalizedModel);
+        default:
+            return normalizedModel;
+    }
+}
+
 const ANTIGRAVITY_MODEL_ALIASES = {
     'claude-sonnet-4-6': {
         internal: 'gemini-claude-sonnet-4-6',
@@ -148,6 +327,21 @@ const ANTIGRAVITY_MODEL_ALIAS_LOOKUP = Object.values(ANTIGRAVITY_MODEL_ALIASES).
 function isAntigravityProviderType(providerType) {
     return providerType === MODEL_PROVIDER.ANTIGRAVITY ||
         (typeof providerType === 'string' && providerType.startsWith(`${MODEL_PROVIDER.ANTIGRAVITY}-`));
+}
+
+function isGeminiCliProviderType(providerType) {
+    return providerType === MODEL_PROVIDER.GEMINI_CLI ||
+        (typeof providerType === 'string' && providerType.startsWith(`${MODEL_PROVIDER.GEMINI_CLI}-`));
+}
+
+function isKiroProviderType(providerType) {
+    return providerType === MODEL_PROVIDER.KIRO_API ||
+        (typeof providerType === 'string' && providerType.startsWith(`${MODEL_PROVIDER.KIRO_API}-`));
+}
+
+function isCodexProviderType(providerType) {
+    return providerType === MODEL_PROVIDER.CODEX_API ||
+        (typeof providerType === 'string' && providerType.startsWith(`${MODEL_PROVIDER.CODEX_API}-`));
 }
 
 export function getManagedModelListProviderType(providerType) {
@@ -179,14 +373,33 @@ export function getEquivalentProviderModelIds(providerType, model) {
         return [];
     }
 
+    const acceptableModelIds = new Set([normalizedModel]);
+
     if (isAntigravityProviderType(providerType)) {
-        const aliasConfig = ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel];
+        const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
+        acceptableModelIds.add(canonicalModel);
+        const aliasConfig = ANTIGRAVITY_MODEL_ALIAS_LOOKUP[canonicalModel] || ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel];
         if (aliasConfig) {
-            return normalizeModelIds(aliasConfig.equivalents);
+            aliasConfig.equivalents.forEach(modelId => acceptableModelIds.add(modelId));
         }
+    } else if (isGeminiCliProviderType(providerType)) {
+        const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
+        acceptableModelIds.add(canonicalModel);
+        const providerModel = normalizeRequestedModelForProvider(providerType, canonicalModel);
+        acceptableModelIds.add(providerModel);
+    } else if (isKiroProviderType(providerType)) {
+        const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
+        acceptableModelIds.add(canonicalModel);
+        const providerModel = normalizeRequestedModelForProvider(providerType, canonicalModel);
+        acceptableModelIds.add(providerModel);
+    } else if (isCodexProviderType(providerType)) {
+        const canonicalModel = normalizeCodexProtocolModel(normalizedModel);
+        acceptableModelIds.add(canonicalModel);
+        const providerModel = normalizeRequestedModelForProvider(providerType, canonicalModel);
+        acceptableModelIds.add(providerModel);
     }
 
-    return [normalizedModel];
+    return normalizeModelIds([...acceptableModelIds]);
 }
 
 export function normalizeRequestedModelForProvider(providerType, model) {
@@ -200,7 +413,33 @@ export function normalizeRequestedModelForProvider(providerType, model) {
     }
 
     if (isAntigravityProviderType(providerType)) {
-        return ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel]?.internal || normalizedModel;
+        const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
+        return ANTIGRAVITY_MODEL_ALIAS_LOOKUP[canonicalModel]?.internal ||
+            ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel]?.internal ||
+            normalizedModel;
+    }
+
+    if (isGeminiCliProviderType(providerType)) {
+        const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
+        if (canonicalModel.startsWith('claude-')) {
+            return 'gemini-3.1-pro-preview';
+        }
+        return normalizedModel;
+    }
+
+    if (isKiroProviderType(providerType)) {
+        const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
+        if (canonicalModel === 'claude-haiku-4-5') {
+            return 'claude-haiku-4-5';
+        }
+        if (canonicalModel.startsWith('claude-')) {
+            return 'claude-sonnet-4-5';
+        }
+        return normalizedModel;
+    }
+
+    if (isCodexProviderType(providerType)) {
+        return normalizeCodexProtocolModel(normalizedModel);
     }
 
     return normalizedModel;
@@ -217,7 +456,10 @@ export function toPublicProviderModelId(providerType, model) {
     }
 
     if (isAntigravityProviderType(providerType)) {
-        return ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel]?.public || normalizedModel;
+        const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
+        return ANTIGRAVITY_MODEL_ALIAS_LOOKUP[canonicalModel]?.public ||
+            ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel]?.public ||
+            normalizedModel;
     }
 
     return normalizedModel;

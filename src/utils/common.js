@@ -53,7 +53,8 @@ export const API_ACTIONS = {
 
 import {
     usesManagedModelList,
-    getConfiguredSupportedModels
+    getConfiguredSupportedModels,
+    normalizeRequestedModelForProtocol
 } from '../providers/provider-models.js';
 
 /**
@@ -966,6 +967,16 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     if (!model) {
         throw new Error("Could not determine the model from the request.");
     }
+
+    const normalizedRequestedModel = normalizeRequestedModelForProtocol(getProtocolPrefix(fromProvider), model);
+    if (normalizedRequestedModel !== model) {
+        logger.info(`[Content Generation] Normalized requested model: ${model} -> ${normalizedRequestedModel}`);
+        model = normalizedRequestedModel;
+        if (typeof originalRequestBody === 'object' && originalRequestBody) {
+            originalRequestBody.model = normalizedRequestedModel;
+        }
+    }
+
     logger.info(`[Content Generation] Model: ${model}, Stream: ${isStream}`);
 
     // 提取会话键（用于会话粘连）

@@ -9,7 +9,7 @@ import { getProviderPoolManager } from '../../services/service-manager.js';
 import { configureTLSSidecar } from '../../utils/proxy-utils.js';
 import { MODEL_PROVIDER, formatExpiryLog } from '../../utils/common.js';
 import { getProxyConfigForProvider } from '../../utils/proxy-utils.js';
-import { getProviderModels } from '../provider-models.js';
+import { getProviderModels, normalizeRequestedModelForProvider } from '../provider-models.js';
 
 const baseModels = getProviderModels(MODEL_PROVIDER.CODEX_API);
 const fastModels = baseModels.map(m => `${m}-fast`);
@@ -162,8 +162,9 @@ export class CodexApiService {
             await this.initialize();
         }
 
-        let selectedModel = model;
-        if (!CODEX_MODELS.includes(model)) {
+        const requestedModel = normalizeRequestedModelForProvider(MODEL_PROVIDER.CODEX_API, model);
+        let selectedModel = requestedModel;
+        if (!CODEX_MODELS.includes(requestedModel)) {
             const defaultModel = CODEX_MODELS[0] || 'gpt-5';
             logger.warn(`[Codex] Model '${model}' not found in supported list. Falling back to default: '${defaultModel}'`);
             selectedModel = defaultModel;
@@ -239,8 +240,9 @@ export class CodexApiService {
             await this.initialize();
         }
 
-        let selectedModel = model;
-        if (!CODEX_MODELS.includes(model)) {
+        const requestedModel = normalizeRequestedModelForProvider(MODEL_PROVIDER.CODEX_API, model);
+        let selectedModel = requestedModel;
+        if (!CODEX_MODELS.includes(requestedModel)) {
             const defaultModel = CODEX_MODELS[0] || 'gpt-5';
             logger.warn(`[Codex] Model '${model}' not found in supported list. Falling back to default: '${defaultModel}'`);
             selectedModel = defaultModel;

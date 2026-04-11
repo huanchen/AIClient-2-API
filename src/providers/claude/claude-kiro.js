@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import * as http from 'http';
 import * as https from 'https';
-import { getProviderModels } from '../provider-models.js';
+import { getProviderModels, normalizeRequestedModelForProvider } from '../provider-models.js';
 import { 
     countTextTokens as countTextTokensUtil, 
     estimateInputTokens as estimateInputTokensUtil, 
@@ -953,7 +953,8 @@ async saveCredentialsToFile(filePath, newData) {
         processedMessages.length = 0;
         processedMessages.push(...mergedMessages);
 
-        const codewhispererModel = MODEL_MAPPING[model] || MODEL_MAPPING[this.modelName];
+        const normalizedRequestedModel = normalizeRequestedModelForProvider(MODEL_PROVIDER.KIRO_API, model);
+        const codewhispererModel = MODEL_MAPPING[normalizedRequestedModel] || MODEL_MAPPING[this.modelName];
         
         // 动态压缩 tools（保留全部工具，但过滤掉 web_search/websearch）
         let toolsContext = {};
@@ -1816,7 +1817,8 @@ async saveCredentialsToFile(filePath, newData) {
             this._markCredentialNeedRefresh('Token near expiry in generateContent');
         }
         
-        const finalModel = MODEL_MAPPING[model] ? model : this.modelName;
+        const requestedModel = normalizeRequestedModelForProvider(MODEL_PROVIDER.KIRO_API, model);
+        const finalModel = MODEL_MAPPING[requestedModel] ? requestedModel : this.modelName;
         logger.info(`[Kiro] Calling generateContent with model: ${finalModel}`);
         
         // Estimate input tokens before making the API call
@@ -2193,7 +2195,8 @@ async saveCredentialsToFile(filePath, newData) {
             this._markCredentialNeedRefresh('Token near expiry in generateContentStream');
         }
         
-        const finalModel = MODEL_MAPPING[model] ? model : this.modelName;
+        const requestedModel = normalizeRequestedModelForProvider(MODEL_PROVIDER.KIRO_API, model);
+        const finalModel = MODEL_MAPPING[requestedModel] ? requestedModel : this.modelName;
         logger.info(`[Kiro] Calling generateContentStream with model: ${finalModel} (real streaming)`);
 
         let inputTokens = 0;

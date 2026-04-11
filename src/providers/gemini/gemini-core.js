@@ -9,7 +9,7 @@ import * as readline from 'readline';
 import open from 'open';
 import { configureTLSSidecar } from '../../utils/proxy-utils.js';
 import { API_ACTIONS, formatExpiryTime, isRetryableNetworkError, formatExpiryLog } from '../../utils/common.js';
-import { getProviderModels } from '../provider-models.js';
+import { getProviderModels, normalizeRequestedModelForProvider } from '../provider-models.js';
 import { handleGeminiCliOAuth } from '../../auth/oauth-handlers.js';
 import { getProxyConfigForProvider, getGoogleAuthProxyConfig } from '../../utils/proxy-utils.js';
 import { getProviderPoolManager } from '../../services/service-manager.js';
@@ -770,8 +770,9 @@ export class GeminiApiService {
             }
         }
         
-        let baseModel = model;
-        if (!GEMINI_MODELS.includes(model)) {
+        const requestedModel = normalizeRequestedModelForProvider(MODEL_PROVIDER.GEMINI_CLI, model);
+        let baseModel = requestedModel;
+        if (!GEMINI_MODELS.includes(requestedModel)) {
             logger.warn(`[Gemini] Model '${model}' not found. Using default model: '${GEMINI_MODELS[0]}'`);
             baseModel = GEMINI_MODELS[0];
         }
@@ -822,8 +823,9 @@ export class GeminiApiService {
             return;
         }
 
-        let baseModel = model;
-        if (!GEMINI_MODELS.includes(model)) {
+        const requestedModel = normalizeRequestedModelForProvider(MODEL_PROVIDER.GEMINI_CLI, model);
+        let baseModel = requestedModel;
+        if (!GEMINI_MODELS.includes(requestedModel)) {
             logger.warn(`[Gemini] Model '${model}' not found. Using default model: '${GEMINI_MODELS[0]}'`);
             baseModel = GEMINI_MODELS[0];
         }
