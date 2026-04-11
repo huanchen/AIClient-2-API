@@ -3,8 +3,13 @@ import { afterEach, describe, expect, jest, test } from '@jest/globals';
 jest.mock('../src/providers/adapter.js', () => ({
     getRegisteredProviders: jest.fn(() => [
         'gemini-cli-oauth',
+        'gemini-antigravity',
+        'claude-custom',
         'claude-kiro-oauth',
-        'openai-codex-oauth'
+        'openai-custom',
+        'openaiResponses-custom',
+        'openai-codex-oauth',
+        'grok-custom'
     ]),
     getServiceAdapter: jest.fn(() => null)
 }));
@@ -52,9 +57,25 @@ describe('provider model routing aliases', () => {
         });
 
         const selected = await manager.selectProvider('gemini-cli-oauth', 'claude-sonnet-4-6');
+        const codexSelected = await manager.selectProvider('gemini-cli-oauth', 'gpt-5.4');
 
         expect(selected).not.toBeNull();
         expect(selected.uuid).toBe('gem-1');
+        expect(codexSelected).not.toBeNull();
+        expect(codexSelected.uuid).toBe('gem-1');
+    });
+
+    test('Antigravity accepts Codex requests via Claude alias mapping during provider selection', async () => {
+        const manager = createManager({
+            'gemini-antigravity': [
+                { uuid: 'anti-1', isHealthy: true, isDisabled: false, needsRefresh: false }
+            ]
+        });
+
+        const selected = await manager.selectProvider('gemini-antigravity', 'gpt-5.4');
+
+        expect(selected).not.toBeNull();
+        expect(selected.uuid).toBe('anti-1');
     });
 
     test('Kiro accepts Claude family requests and routes them through Sonnet or Haiku targets', async () => {
@@ -66,11 +87,14 @@ describe('provider model routing aliases', () => {
 
         const opusSelected = await manager.selectProvider('claude-kiro-oauth', 'claude-opus-4-6');
         const haikuSelected = await manager.selectProvider('claude-kiro-oauth', 'claude-haiku-4.5');
+        const codexSelected = await manager.selectProvider('claude-kiro-oauth', 'gpt-5.4');
 
         expect(opusSelected).not.toBeNull();
         expect(opusSelected.uuid).toBe('kiro-1');
         expect(haikuSelected).not.toBeNull();
         expect(haikuSelected.uuid).toBe('kiro-1');
+        expect(codexSelected).not.toBeNull();
+        expect(codexSelected.uuid).toBe('kiro-1');
     });
 
     test('Codex accepts client label aliases during provider selection', async () => {
@@ -84,5 +108,43 @@ describe('provider model routing aliases', () => {
 
         expect(selected).not.toBeNull();
         expect(selected.uuid).toBe('codex-1');
+    });
+
+    test('Claude custom accepts Codex requests when configured supported models only expose Sonnet', async () => {
+        const manager = createManager({
+            'claude-custom': [
+                {
+                    uuid: 'claude-1',
+                    isHealthy: true,
+                    isDisabled: false,
+                    needsRefresh: false,
+                    supportedModels: ['claude-sonnet-4-5']
+                }
+            ]
+        });
+
+        const selected = await manager.selectProvider('claude-custom', 'gpt-5.4');
+
+        expect(selected).not.toBeNull();
+        expect(selected.uuid).toBe('claude-1');
+    });
+
+    test('OpenAI custom accepts Claude requests when only gpt-5.4 is configured', async () => {
+        const manager = createManager({
+            'openai-custom': [
+                {
+                    uuid: 'openai-1',
+                    isHealthy: true,
+                    isDisabled: false,
+                    needsRefresh: false,
+                    supportedModels: ['gpt-5.4']
+                }
+            ]
+        });
+
+        const selected = await manager.selectProvider('openai-custom', 'claude-sonnet-4-6');
+
+        expect(selected).not.toBeNull();
+        expect(selected.uuid).toBe('openai-1');
     });
 });

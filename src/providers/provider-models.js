@@ -223,6 +223,28 @@ const CODEX_PROTOCOL_MODEL_ALIASES = {
     ]
 };
 
+const OPENAI_UPSTREAM_DEFAULT_MODEL = 'gpt-5.4';
+const GEMINI_UPSTREAM_DEFAULT_MODEL = 'gemini-3.1-pro-preview';
+const KIRO_UPSTREAM_DEFAULT_MODEL = 'claude-sonnet-4-5';
+const GROK_UPSTREAM_DEFAULT_MODEL = 'grok-4.20';
+const CODEX_HIGH_CAPABILITY_MODEL = 'gpt-5.4';
+const SUPPORTED_CODEX_CLIENT_MODELS = new Set([
+    'gpt-5.3-codex',
+    'gpt-5.4'
+]);
+const CLAUDE_OPUS_MODEL_PREFERENCES = [
+    'claude-opus-4-6',
+    'claude-opus-4-5-20251101',
+    'claude-opus-4-5'
+];
+const CLAUDE_SONNET_MODEL_PREFERENCES = [
+    'claude-sonnet-4-6',
+    'claude-sonnet-4-5-20250929',
+    'claude-sonnet-4-5',
+    'claude-sonnet-4-20250514',
+    'claude-3-7-sonnet-20250219'
+];
+
 function normalizeAliasLookupKey(model) {
     if (typeof model !== 'string') {
         return '';
@@ -279,6 +301,59 @@ function normalizeCodexProtocolModel(model) {
     }
 
     return CODEX_PROTOCOL_MODEL_ALIAS_LOOKUP[normalizeAliasLookupKey(normalizedModel)] || normalizedModel;
+}
+
+function getSupportedCodexClientModel(model) {
+    const canonicalModel = normalizeCodexProtocolModel(model);
+    return SUPPORTED_CODEX_CLIENT_MODELS.has(canonicalModel) ? canonicalModel : null;
+}
+
+function isClaudeFamilyModel(model) {
+    return typeof model === 'string' && model.startsWith('claude-');
+}
+
+function isClaudeOpusModel(model) {
+    return isClaudeFamilyModel(model) && model.includes('-opus-');
+}
+
+function isClaudeHaikuModel(model) {
+    return isClaudeFamilyModel(model) && model.includes('-haiku-');
+}
+
+function selectPreferredModel(supportedModels = [], preferredModels = [], fallbackModel) {
+    const normalizedSupportedModels = normalizeModelIds(supportedModels);
+    if (normalizedSupportedModels.length === 0) {
+        return fallbackModel;
+    }
+
+    for (const candidate of preferredModels) {
+        if (normalizedSupportedModels.includes(candidate)) {
+            return candidate;
+        }
+    }
+
+    return normalizedSupportedModels[0] || fallbackModel;
+}
+
+function resolveClaudeTargetForCodex(model, supportedModels = []) {
+    const canonicalCodexModel = getSupportedCodexClientModel(model);
+    if (!canonicalCodexModel) {
+        return null;
+    }
+
+    if (canonicalCodexModel === CODEX_HIGH_CAPABILITY_MODEL) {
+        return selectPreferredModel(
+            supportedModels,
+            [...CLAUDE_OPUS_MODEL_PREFERENCES, ...CLAUDE_SONNET_MODEL_PREFERENCES],
+            CLAUDE_OPUS_MODEL_PREFERENCES[0]
+        );
+    }
+
+    return selectPreferredModel(
+        supportedModels,
+        CLAUDE_SONNET_MODEL_PREFERENCES,
+        CLAUDE_SONNET_MODEL_PREFERENCES[0]
+    );
 }
 
 export function normalizeRequestedModelForProtocol(protocol, model) {
@@ -344,6 +419,26 @@ function isCodexProviderType(providerType) {
         (typeof providerType === 'string' && providerType.startsWith(`${MODEL_PROVIDER.CODEX_API}-`));
 }
 
+function isOpenAICustomProviderType(providerType) {
+    return providerType === MODEL_PROVIDER.OPENAI_CUSTOM ||
+        (typeof providerType === 'string' && providerType.startsWith(`${MODEL_PROVIDER.OPENAI_CUSTOM}-`));
+}
+
+function isOpenAIResponsesProviderType(providerType) {
+    return providerType === MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES ||
+        (typeof providerType === 'string' && providerType.startsWith(`${MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES}-`));
+}
+
+function isClaudeCustomProviderType(providerType) {
+    return providerType === MODEL_PROVIDER.CLAUDE_CUSTOM ||
+        (typeof providerType === 'string' && providerType.startsWith(`${MODEL_PROVIDER.CLAUDE_CUSTOM}-`));
+}
+
+function isGrokProviderType(providerType) {
+    return providerType === MODEL_PROVIDER.GROK_CUSTOM ||
+        (typeof providerType === 'string' && providerType.startsWith(`${MODEL_PROVIDER.GROK_CUSTOM}-`));
+}
+
 export function getManagedModelListProviderType(providerType) {
     return MANAGED_MODEL_LIST_PROVIDERS.find(baseType =>
         providerType === baseType || providerType.startsWith(baseType + '-')
@@ -363,7 +458,7 @@ export function normalizeModelIds(models = []) {
     )].sort((a, b) => a.localeCompare(b));
 }
 
-export function getEquivalentProviderModelIds(providerType, model) {
+export function getEquivalentProviderModelIds(providerType, model, supportedModels = []) {
     if (typeof model !== 'string') {
         return [];
     }
@@ -378,31 +473,79 @@ export function getEquivalentProviderModelIds(providerType, model) {
     if (isAntigravityProviderType(providerType)) {
         const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
         acceptableModelIds.add(canonicalModel);
-        const aliasConfig = ANTIGRAVITY_MODEL_ALIAS_LOOKUP[canonicalModel] || ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel];
+        const providerModel = normalizeRequestedModelForProvider(providerType, normalizedModel, supportedModels);
+        acceptableModelIds.add(providerModel);
+        const aliasConfig =
+            ANTIGRAVITY_MODEL_ALIAS_LOOKUP[providerModel] ||
+            ANTIGRAVITY_MODEL_ALIAS_LOOKUP[canonicalModel] ||
+            ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel];
         if (aliasConfig) {
             aliasConfig.equivalents.forEach(modelId => acceptableModelIds.add(modelId));
         }
     } else if (isGeminiCliProviderType(providerType)) {
         const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
         acceptableModelIds.add(canonicalModel);
-        const providerModel = normalizeRequestedModelForProvider(providerType, canonicalModel);
+        const canonicalCodexModel = getSupportedCodexClientModel(normalizedModel);
+        if (canonicalCodexModel) {
+            acceptableModelIds.add(canonicalCodexModel);
+        }
+        const providerModel = normalizeRequestedModelForProvider(providerType, normalizedModel, supportedModels);
         acceptableModelIds.add(providerModel);
     } else if (isKiroProviderType(providerType)) {
         const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
         acceptableModelIds.add(canonicalModel);
-        const providerModel = normalizeRequestedModelForProvider(providerType, canonicalModel);
+        const canonicalCodexModel = getSupportedCodexClientModel(normalizedModel);
+        if (canonicalCodexModel) {
+            acceptableModelIds.add(canonicalCodexModel);
+        }
+        const providerModel = normalizeRequestedModelForProvider(providerType, normalizedModel, supportedModels);
         acceptableModelIds.add(providerModel);
     } else if (isCodexProviderType(providerType)) {
-        const canonicalModel = normalizeCodexProtocolModel(normalizedModel);
+        const canonicalClaudeModel = normalizeClaudeProviderModel(normalizedModel);
+        if (isClaudeFamilyModel(canonicalClaudeModel)) {
+            acceptableModelIds.add(canonicalClaudeModel);
+        }
+        const canonicalModel = isClaudeFamilyModel(canonicalClaudeModel)
+            ? canonicalClaudeModel
+            : normalizeCodexProtocolModel(normalizedModel);
         acceptableModelIds.add(canonicalModel);
-        const providerModel = normalizeRequestedModelForProvider(providerType, canonicalModel);
+        const providerModel = normalizeRequestedModelForProvider(providerType, canonicalModel, supportedModels);
+        acceptableModelIds.add(providerModel);
+    } else if (isOpenAICustomProviderType(providerType) || isOpenAIResponsesProviderType(providerType)) {
+        const canonicalClaudeModel = normalizeClaudeProviderModel(normalizedModel);
+        if (isClaudeFamilyModel(canonicalClaudeModel)) {
+            acceptableModelIds.add(canonicalClaudeModel);
+        }
+        const providerModel = normalizeRequestedModelForProvider(providerType, normalizedModel, supportedModels);
+        acceptableModelIds.add(providerModel);
+    } else if (isClaudeCustomProviderType(providerType)) {
+        const canonicalClaudeModel = normalizeClaudeProviderModel(normalizedModel);
+        if (isClaudeFamilyModel(canonicalClaudeModel)) {
+            acceptableModelIds.add(canonicalClaudeModel);
+        }
+        const canonicalCodexModel = getSupportedCodexClientModel(normalizedModel);
+        if (canonicalCodexModel) {
+            acceptableModelIds.add(canonicalCodexModel);
+        }
+        const providerModel = normalizeRequestedModelForProvider(providerType, normalizedModel, supportedModels);
+        acceptableModelIds.add(providerModel);
+    } else if (isGrokProviderType(providerType)) {
+        const canonicalClaudeModel = normalizeClaudeProviderModel(normalizedModel);
+        if (isClaudeFamilyModel(canonicalClaudeModel)) {
+            acceptableModelIds.add(canonicalClaudeModel);
+        }
+        const canonicalCodexModel = getSupportedCodexClientModel(normalizedModel);
+        if (canonicalCodexModel) {
+            acceptableModelIds.add(canonicalCodexModel);
+        }
+        const providerModel = normalizeRequestedModelForProvider(providerType, normalizedModel, supportedModels);
         acceptableModelIds.add(providerModel);
     }
 
     return normalizeModelIds([...acceptableModelIds]);
 }
 
-export function normalizeRequestedModelForProvider(providerType, model) {
+export function normalizeRequestedModelForProvider(providerType, model, supportedModels = []) {
     if (typeof model !== 'string') {
         return model;
     }
@@ -413,33 +556,103 @@ export function normalizeRequestedModelForProvider(providerType, model) {
     }
 
     if (isAntigravityProviderType(providerType)) {
+        const codexClaudeTarget = resolveClaudeTargetForCodex(normalizedModel);
+        if (codexClaudeTarget) {
+            return ANTIGRAVITY_MODEL_ALIAS_LOOKUP[codexClaudeTarget]?.internal || codexClaudeTarget;
+        }
+
         const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
+        if (isClaudeOpusModel(canonicalModel)) {
+            return ANTIGRAVITY_MODEL_ALIAS_LOOKUP['claude-opus-4-6']?.internal || canonicalModel;
+        }
+        if (isClaudeFamilyModel(canonicalModel)) {
+            return ANTIGRAVITY_MODEL_ALIAS_LOOKUP['claude-sonnet-4-6']?.internal || canonicalModel;
+        }
+
         return ANTIGRAVITY_MODEL_ALIAS_LOOKUP[canonicalModel]?.internal ||
             ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel]?.internal ||
             normalizedModel;
     }
 
     if (isGeminiCliProviderType(providerType)) {
+        const canonicalCodexModel = getSupportedCodexClientModel(normalizedModel);
+        if (canonicalCodexModel) {
+            return GEMINI_UPSTREAM_DEFAULT_MODEL;
+        }
+
         const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
-        if (canonicalModel.startsWith('claude-')) {
-            return 'gemini-3.1-pro-preview';
+        if (isClaudeFamilyModel(canonicalModel)) {
+            return GEMINI_UPSTREAM_DEFAULT_MODEL;
         }
         return normalizedModel;
     }
 
     if (isKiroProviderType(providerType)) {
+        const canonicalCodexModel = getSupportedCodexClientModel(normalizedModel);
+        if (canonicalCodexModel) {
+            return KIRO_UPSTREAM_DEFAULT_MODEL;
+        }
+
         const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
-        if (canonicalModel === 'claude-haiku-4-5') {
+        if (isClaudeHaikuModel(canonicalModel)) {
             return 'claude-haiku-4-5';
         }
-        if (canonicalModel.startsWith('claude-')) {
-            return 'claude-sonnet-4-5';
+        if (isClaudeFamilyModel(canonicalModel)) {
+            return KIRO_UPSTREAM_DEFAULT_MODEL;
         }
         return normalizedModel;
     }
 
     if (isCodexProviderType(providerType)) {
+        const canonicalClaudeModel = normalizeClaudeProviderModel(normalizedModel);
+        if (isClaudeFamilyModel(canonicalClaudeModel)) {
+            return OPENAI_UPSTREAM_DEFAULT_MODEL;
+        }
         return normalizeCodexProtocolModel(normalizedModel);
+    }
+
+    if (isOpenAICustomProviderType(providerType) || isOpenAIResponsesProviderType(providerType)) {
+        const canonicalClaudeModel = normalizeClaudeProviderModel(normalizedModel);
+        if (isClaudeFamilyModel(canonicalClaudeModel)) {
+            return OPENAI_UPSTREAM_DEFAULT_MODEL;
+        }
+        return normalizeCodexProtocolModel(normalizedModel);
+    }
+
+    if (isClaudeCustomProviderType(providerType)) {
+        if (normalizedModel.toLowerCase().startsWith('claude-')) {
+            return normalizedModel;
+        }
+
+        const codexClaudeTarget = resolveClaudeTargetForCodex(normalizedModel, supportedModels);
+        if (codexClaudeTarget) {
+            return codexClaudeTarget;
+        }
+
+        const canonicalClaudeModel = normalizeClaudeProviderModel(normalizedModel);
+        if (isClaudeFamilyModel(canonicalClaudeModel)) {
+            return canonicalClaudeModel;
+        }
+
+        return normalizedModel;
+    }
+
+    if (isGrokProviderType(providerType)) {
+        if (PROVIDER_MODELS[MODEL_PROVIDER.GROK_CUSTOM].includes(normalizedModel)) {
+            return normalizedModel;
+        }
+
+        const canonicalCodexModel = getSupportedCodexClientModel(normalizedModel);
+        if (canonicalCodexModel) {
+            return GROK_UPSTREAM_DEFAULT_MODEL;
+        }
+
+        const canonicalClaudeModel = normalizeClaudeProviderModel(normalizedModel);
+        if (isClaudeFamilyModel(canonicalClaudeModel)) {
+            return GROK_UPSTREAM_DEFAULT_MODEL;
+        }
+
+        return normalizedModel;
     }
 
     return normalizedModel;
@@ -481,7 +694,7 @@ export function providerSupportsModel(providerType, requestedModel, supportedMod
         return true;
     }
 
-    const acceptableModelIds = new Set(getEquivalentProviderModelIds(providerType, requestedModel));
+    const acceptableModelIds = new Set(getEquivalentProviderModelIds(providerType, requestedModel, normalizedSupportedModels));
     return normalizedSupportedModels.some(modelId => acceptableModelIds.has(modelId));
 }
 

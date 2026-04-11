@@ -4,6 +4,7 @@ import * as http from 'http';
 import * as https from 'https';
 import { configureAxiosProxy, configureTLSSidecar } from '../../utils/proxy-utils.js';
 import { isRetryableNetworkError, MODEL_PROVIDER } from '../../utils/common.js';
+import { normalizeRequestedModelForProvider } from '../provider-models.js';
 
 // Assumed OpenAI API specification service for interacting with third-party models
 export class OpenAIApiService {
@@ -213,6 +214,11 @@ export class OpenAIApiService {
             delete requestBody._requestBaseUrl;
         }
 
+        requestBody.model = normalizeRequestedModelForProvider(
+            this.config.MODEL_PROVIDER || MODEL_PROVIDER.OPENAI_CUSTOM,
+            model
+        );
+
         return this.callApi('/chat/completions', requestBody);
     }
 
@@ -225,6 +231,11 @@ export class OpenAIApiService {
         if (requestBody._requestBaseUrl) {
             delete requestBody._requestBaseUrl;
         }
+
+        requestBody.model = normalizeRequestedModelForProvider(
+            this.config.MODEL_PROVIDER || MODEL_PROVIDER.OPENAI_CUSTOM,
+            model
+        );
 
         yield* this.streamApi('/chat/completions', requestBody);
     }

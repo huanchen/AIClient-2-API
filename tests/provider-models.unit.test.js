@@ -66,16 +66,48 @@ describe('provider-models helpers', () => {
             .toBe('gemini-3.1-pro-preview');
         expect(normalizeRequestedModelForProvider('gemini-cli-oauth', 'claude-haiku-4.5'))
             .toBe('gemini-3.1-pro-preview');
+        expect(normalizeRequestedModelForProvider('gemini-cli-oauth', 'gpt-5.4'))
+            .toBe('gemini-3.1-pro-preview');
         expect(normalizeRequestedModelForProvider('claude-kiro-oauth', 'claude-opus-4-6'))
             .toBe('claude-sonnet-4-5');
         expect(normalizeRequestedModelForProvider('claude-kiro-oauth', 'claude-haiku-4.5'))
             .toBe('claude-haiku-4-5');
+        expect(normalizeRequestedModelForProvider('claude-kiro-oauth', 'gpt-5.4'))
+            .toBe('claude-sonnet-4-5');
     });
 
     test('normalizes Codex client aliases for Codex provider requests', () => {
         expect(normalizeRequestedModelForProvider('openai-codex-oauth', 'gpt-5.3-codex (default)'))
             .toBe('gpt-5.3-codex');
         expect(normalizeRequestedModelForProvider('openai-codex-oauth', 'gpt-5.4 (current)'))
+            .toBe('gpt-5.4');
+    });
+
+    test('normalizes Codex client models for Claude-compatible upstream providers', () => {
+        expect(normalizeRequestedModelForProvider('gemini-antigravity', 'gpt-5.4'))
+            .toBe('gemini-claude-opus-4-6-thinking');
+        expect(normalizeRequestedModelForProvider('gemini-antigravity', 'gpt-5.3-codex'))
+            .toBe('gemini-claude-sonnet-4-6');
+        expect(normalizeRequestedModelForProvider('claude-custom', 'gpt-5.4', ['claude-opus-4-6', 'claude-sonnet-4-6']))
+            .toBe('claude-opus-4-6');
+        expect(normalizeRequestedModelForProvider('claude-custom', 'gpt-5.4', ['claude-sonnet-4-5']))
+            .toBe('claude-sonnet-4-5');
+        expect(normalizeRequestedModelForProvider('claude-custom', 'gpt-5.3-codex', ['claude-sonnet-4-6']))
+            .toBe('claude-sonnet-4-6');
+        expect(normalizeRequestedModelForProvider('claude-custom', 'claude-sonnet-4-20250514'))
+            .toBe('claude-sonnet-4-20250514');
+        expect(normalizeRequestedModelForProvider('grok-custom', 'gpt-5.4'))
+            .toBe('grok-4.20');
+        expect(normalizeRequestedModelForProvider('grok-custom', 'claude-sonnet-4-6'))
+            .toBe('grok-4.20');
+        expect(normalizeRequestedModelForProvider('grok-custom', 'grok-4.20-fast'))
+            .toBe('grok-4.20-fast');
+    });
+
+    test('normalizes Claude requests for OpenAI-compatible upstream providers', () => {
+        expect(normalizeRequestedModelForProvider('openai-custom', 'claude-sonnet-4-6'))
+            .toBe('gpt-5.4');
+        expect(normalizeRequestedModelForProvider('openaiResponses-custom', 'claude-haiku-4-5'))
             .toBe('gpt-5.4');
     });
 
@@ -116,6 +148,10 @@ describe('provider-models helpers', () => {
         expect(providerSupportsModel('claude-kiro-oauth', 'claude-haiku-4.5', [
             'claude-haiku-4-5'
         ])).toBe(true);
+
+        expect(providerSupportsModel('gemini-antigravity', 'gpt-5.4', [
+            'gemini-claude-opus-4-6-thinking'
+        ])).toBe(true);
     });
 
     test('matches Codex client aliases against Codex supported models', () => {
@@ -124,6 +160,28 @@ describe('provider-models helpers', () => {
         ])).toBe(true);
 
         expect(providerSupportsModel('openai-codex-oauth', 'gpt-5.4 (current)', [
+            'gpt-5.4'
+        ])).toBe(true);
+    });
+
+    test('matches Codex and Claude aliases against Claude and Grok upstream models', () => {
+        expect(providerSupportsModel('claude-custom', 'gpt-5.4', [
+            'claude-sonnet-4-5'
+        ])).toBe(true);
+
+        expect(providerSupportsModel('claude-custom', 'claude-sonnet-4-6', [
+            'claude-sonnet-4-6'
+        ])).toBe(true);
+
+        expect(providerSupportsModel('grok-custom', 'gpt-5.4', [
+            'grok-4.20'
+        ])).toBe(true);
+
+        expect(providerSupportsModel('openai-custom', 'claude-sonnet-4-6', [
+            'gpt-5.4'
+        ])).toBe(true);
+
+        expect(providerSupportsModel('openaiResponses-custom', 'claude-haiku-4-5', [
             'gpt-5.4'
         ])).toBe(true);
     });

@@ -4,6 +4,7 @@ import * as http from 'http';
 import * as https from 'https';
 import { configureAxiosProxy, configureTLSSidecar } from '../../utils/proxy-utils.js';
 import { isRetryableNetworkError, MODEL_PROVIDER } from '../../utils/common.js';
+import { normalizeRequestedModelForProvider } from '../provider-models.js';
 
 /**
  * Claude API Core Service Class.
@@ -251,6 +252,12 @@ export class ClaudeApiService {
         if (requestBody._requestBaseUrl) {
             delete requestBody._requestBaseUrl;
         }
+
+        requestBody.model = normalizeRequestedModelForProvider(
+            this.config.MODEL_PROVIDER || MODEL_PROVIDER.CLAUDE_CUSTOM,
+            model,
+            this.config.supportedModels
+        );
         
         const response = await this.callApi('/messages', requestBody);
         return response;
@@ -263,6 +270,20 @@ export class ClaudeApiService {
      * @returns {AsyncIterable<object>} Claude API response stream (Claude compatible format).
      */
     async *generateContentStream(model, requestBody) {
+        if (requestBody._monitorRequestId) {
+            this.config._monitorRequestId = requestBody._monitorRequestId;
+            delete requestBody._monitorRequestId;
+        }
+        if (requestBody._requestBaseUrl) {
+            delete requestBody._requestBaseUrl;
+        }
+
+        requestBody.model = normalizeRequestedModelForProvider(
+            this.config.MODEL_PROVIDER || MODEL_PROVIDER.CLAUDE_CUSTOM,
+            model,
+            this.config.supportedModels
+        );
+
         const stream = this.streamApi('/messages', requestBody);
         for await (const chunk of stream) {
             yield chunk;

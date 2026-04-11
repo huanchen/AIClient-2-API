@@ -4,6 +4,7 @@ import * as http from 'http';
 import * as https from 'https';
 import { configureAxiosProxy, configureTLSSidecar } from '../../utils/proxy-utils.js';
 import { MODEL_PROVIDER } from '../../utils/common.js';
+import { normalizeRequestedModelForProvider } from '../provider-models.js';
 
 // OpenAI Responses API specification service for interacting with third-party models
 export class OpenAIResponsesApiService {
@@ -182,6 +183,11 @@ export class OpenAIResponsesApiService {
             delete requestBody._requestBaseUrl;
         }
 
+        requestBody.model = normalizeRequestedModelForProvider(
+            this.config.MODEL_PROVIDER || MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES,
+            model
+        );
+
         return this.callApi('/responses', requestBody);
     }
 
@@ -194,6 +200,11 @@ export class OpenAIResponsesApiService {
         if (requestBody._requestBaseUrl) {
             delete requestBody._requestBaseUrl;
         }
+
+        requestBody.model = normalizeRequestedModelForProvider(
+            this.config.MODEL_PROVIDER || MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES,
+            model
+        );
 
         yield* this.streamApi('/responses', requestBody);
     }
