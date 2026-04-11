@@ -9,12 +9,12 @@ import { ProviderPoolManager } from '../src/providers/provider-pool-manager.js';
 const providerType = 'openai-custom';
 const managedInstances = [];
 
-function createManager() {
+function createManager(providerConfigs = [
+    { uuid: 'node-a', isHealthy: true, isDisabled: false, needsRefresh: false },
+    { uuid: 'node-b', isHealthy: true, isDisabled: false, needsRefresh: false }
+]) {
     const manager = new ProviderPoolManager({
-        [providerType]: [
-            { uuid: 'node-a', isHealthy: true, isDisabled: false, needsRefresh: false },
-            { uuid: 'node-b', isHealthy: true, isDisabled: false, needsRefresh: false }
-        ]
+        [providerType]: providerConfigs
     }, {
         saveDebounceTime: 600000,
         globalConfig: {
@@ -108,6 +108,30 @@ describe('session affinity fixes', () => {
         expect(provider.isHealthy).toBe(false);
         expect(provider.scheduledRecoveryTime ?? null).toBeNull();
         expect(manager.consistentHashRings.get(providerType).nodeSet).toEqual(new Set(['node-b']));
+    });
+
+    test('cold start clears persisted unhealthy nodes that have no recovery deadline', () => {
+        const manager = createManager([
+            {
+                uuid: 'node-a',
+                isHealthy: false,
+                isDisabled: false,
+                needsRefresh: false,
+                errorCount: 11,
+                lastErrorTime: '2026-04-11T15:57:06.119Z',
+                lastErrorMessage: 'Request failed with status code 403'
+            },
+            { uuid: 'node-b', isHealthy: true, isDisabled: false, needsRefresh: false }
+        ]);
+
+        const provider = manager.providerStatus[providerType].find(p => p.config.uuid === 'node-a').config;
+
+        expect(provider.isHealthy).toBe(true);
+        expect(provider.errorCount).toBe(0);
+        expect(provider.lastErrorTime).toBeNull();
+        expect(provider.lastErrorMessage).toBeNull();
+        expect(provider.scheduledRecoveryTime).toBeNull();
+        expect(manager.consistentHashRings.get(providerType).nodeSet).toEqual(new Set(['node-a', 'node-b']));
     });
 
     test('reroutes a session away from a cooled node instead of dropping session state', () => {

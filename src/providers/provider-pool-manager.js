@@ -711,12 +711,27 @@ export class ProviderPoolManager {
                     // 尝试从旧状态中恢复活跃请求计数和队列，避免重载配置时重置并发限制
                     const existing = oldStatus.find(p => p.uuid === providerConfig.uuid);
 
+                    const hasScheduledRecovery = providerConfig.scheduledRecoveryTime !== undefined
+                        && providerConfig.scheduledRecoveryTime !== null
+                        && providerConfig.scheduledRecoveryTime !== '';
+                    const shouldResetPersistedUnhealthyState = isColdStart
+                        && providerConfig.isHealthy === false
+                        && !hasScheduledRecovery;
+
+                    if (shouldResetPersistedUnhealthyState) {
+                        this._log('info', `Resetting persisted unhealthy state for provider ${providerConfig.uuid} (${providerType}) on startup.`);
+                    }
+
                     // Ensure initial health and usage stats are present in the config
-                    providerConfig.isHealthy = providerConfig.isHealthy !== undefined ? providerConfig.isHealthy : true;
+                    providerConfig.isHealthy = shouldResetPersistedUnhealthyState
+                        ? true
+                        : (providerConfig.isHealthy !== undefined ? providerConfig.isHealthy : true);
                     providerConfig.isDisabled = providerConfig.isDisabled !== undefined ? providerConfig.isDisabled : false;
                     providerConfig.lastUsed = providerConfig.lastUsed !== undefined ? providerConfig.lastUsed : null;
                     providerConfig.usageCount = providerConfig.usageCount !== undefined ? providerConfig.usageCount : 0;
-                    providerConfig.errorCount = providerConfig.errorCount !== undefined ? providerConfig.errorCount : 0;
+                    providerConfig.errorCount = shouldResetPersistedUnhealthyState
+                        ? 0
+                        : (providerConfig.errorCount !== undefined ? providerConfig.errorCount : 0);
                     
                     // --- V2: 刷新监控字段 ---
                     const persistedNeedsRefresh = providerConfig.needsRefresh !== undefined ? providerConfig.needsRefresh : false;
@@ -728,14 +743,22 @@ export class ProviderPoolManager {
                     providerConfig.refreshCount = isColdStart ? 0 : persistedRefreshCount;
                     
                     // 优化2: 简化 lastErrorTime 处理逻辑
-                    providerConfig.lastErrorTime = providerConfig.lastErrorTime instanceof Date
-                        ? providerConfig.lastErrorTime.toISOString()
-                        : (providerConfig.lastErrorTime || null);
+                    providerConfig.lastErrorTime = shouldResetPersistedUnhealthyState
+                        ? null
+                        : (providerConfig.lastErrorTime instanceof Date
+                            ? providerConfig.lastErrorTime.toISOString()
+                            : (providerConfig.lastErrorTime || null));
                     
                     // 健康检测相关字段
                     providerConfig.lastHealthCheckTime = providerConfig.lastHealthCheckTime || null;
                     providerConfig.lastHealthCheckModel = providerConfig.lastHealthCheckModel || null;
-                    providerConfig.lastErrorMessage = providerConfig.lastErrorMessage || null;
+                    providerConfig.lastErrorMessage = shouldResetPersistedUnhealthyState
+                        ? null
+                        : (providerConfig.lastErrorMessage || null);
+                    providerConfig.scheduledRecoveryTime = hasScheduledRecovery ? providerConfig.scheduledRecoveryTime : null;
+                    providerConfig.lastCoolDownDuration = shouldResetPersistedUnhealthyState
+                        ? 0
+                        : (providerConfig.lastCoolDownDuration || 0);
                     providerConfig.customName = providerConfig.customName || null;
 
                     this.providerStatus[providerType].push({

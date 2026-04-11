@@ -14,7 +14,7 @@ import { configureTLSSidecar } from '../../utils/proxy-utils.js';
 import { formatExpiryTime, isRetryableNetworkError, formatExpiryLog } from '../../utils/common.js';
 import {
     getProviderModels,
-    normalizeRequestedModelForProvider,
+    resolveAntigravityRequestModel,
     toPublicProviderModelId
 } from '../provider-models.js';
 import { handleGeminiAntigravityOAuth } from '../../auth/oauth-handlers.js';
@@ -1334,25 +1334,22 @@ export class AntigravityApiService {
             }
         }
 
-        const requestedModel = normalizeRequestedModelForProvider(MODEL_PROVIDER.ANTIGRAVITY, model);
-        let selectedModel = requestedModel;
-        if (!this.availableModels.includes(requestedModel)) {
-            logger.warn(`[Antigravity] Model '${model}' not found. Using default model: 'gemini-3-flash'`);
-            selectedModel = 'gemini-3-flash';
+        const { selectedModel, publicModelName, usedFallback } = resolveAntigravityRequestModel(model, this.availableModels);
+        if (usedFallback) {
+            logger.warn(`[Antigravity] Model '${model}' not found. Using default model: '${selectedModel}'`);
         }
 
-        // 移除 gemini- 前缀以获取实际模型名称（针对 claude 模型）
-        const actualModelName = selectedModel.startsWith('gemini-claude-') ? selectedModel.replace('gemini-claude-', 'claude-') : selectedModel;
-        logger.info(`[Antigravity] Selected model: ${actualModelName}`);
+        // 保留内部 upstream 模型名发给 Antigravity，同时记录对外展示的 Claude 名称
+        logger.info(`[Antigravity] Selected model: ${publicModelName} (upstream: ${selectedModel})`);
         // 深拷贝请求体
-        const processedRequestBody = ensureRolesInContents(JSON.parse(JSON.stringify(requestBody)), actualModelName);
-        const isClaudeModel = isClaude(actualModelName);
+        const processedRequestBody = ensureRolesInContents(JSON.parse(JSON.stringify(requestBody)), selectedModel);
+        const isClaudeModel = isClaude(selectedModel);
 
         // 将处理后的请求体转换为 Antigravity 格式
-        const payload = geminiToAntigravity(actualModelName, { request: processedRequestBody }, this.projectId);
+        const payload = geminiToAntigravity(selectedModel, { request: processedRequestBody }, this.projectId);
 
         // 设置模型名称为实际模型名
-        payload.model = actualModelName;
+        payload.model = selectedModel;
 
         // 对于 Claude 模型，使用流式请求然后转换为非流式响应
         if (isClaudeModel) {
@@ -1413,24 +1410,21 @@ export class AntigravityApiService {
             }
         }
 
-        const requestedModel = normalizeRequestedModelForProvider(MODEL_PROVIDER.ANTIGRAVITY, model);
-        let selectedModel = requestedModel;
-        if (!this.availableModels.includes(requestedModel)) {
-            logger.warn(`[Antigravity] Model '${model}' not found. Using default model: 'gemini-3-flash'`);
-            selectedModel = 'gemini-3-flash';
+        const { selectedModel, publicModelName, usedFallback } = resolveAntigravityRequestModel(model, this.availableModels);
+        if (usedFallback) {
+            logger.warn(`[Antigravity] Model '${model}' not found. Using default model: '${selectedModel}'`);
         }
 
-        // 移除 gemini- 前缀以获取实际模型名称（针对 claude 模型）
-        const actualModelName = selectedModel.startsWith('gemini-claude-') ? selectedModel.replace('gemini-claude-', 'claude-') : selectedModel;
-        logger.info(`[Antigravity] Selected model: ${actualModelName}`);
+        // 保留内部 upstream 模型名发给 Antigravity，同时记录对外展示的 Claude 名称
+        logger.info(`[Antigravity] Selected model: ${publicModelName} (upstream: ${selectedModel})`);
         // 深拷贝请求体
-        const processedRequestBody = ensureRolesInContents(JSON.parse(JSON.stringify(requestBody)), actualModelName);
+        const processedRequestBody = ensureRolesInContents(JSON.parse(JSON.stringify(requestBody)), selectedModel);
 
         // 将处理后的请求体转换为 Antigravity 格式
-        const payload = geminiToAntigravity(actualModelName, { request: processedRequestBody }, this.projectId);
+        const payload = geminiToAntigravity(selectedModel, { request: processedRequestBody }, this.projectId);
 
         // 设置模型名称为实际模型名
-        payload.model = actualModelName;
+        payload.model = selectedModel;
 
         const stream = this.streamApi('streamGenerateContent', payload);
         for await (const chunk of stream) {

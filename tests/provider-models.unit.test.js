@@ -6,6 +6,7 @@ import {
     normalizeRequestedModelForProtocol,
     normalizeRequestedModelForProvider,
     providerSupportsModel,
+    resolveAntigravityRequestModel,
     resetClientModelRoutingRules,
     setClientModelRoutingRules,
     toPublicProviderModelId,
@@ -65,6 +66,24 @@ describe('provider-models helpers', () => {
             .toBe('gemini-claude-opus-4-6-thinking');
         expect(normalizeRequestedModelForProvider('gemini-antigravity', 'gemini-claude-sonnet-4-6'))
             .toBe('gemini-claude-sonnet-4-6');
+    });
+
+    test('resolves Antigravity requests to internal upstream model ids', () => {
+        expect(resolveAntigravityRequestModel('claude-opus-4-6', ['gemini-claude-opus-4-6-thinking']))
+            .toMatchObject({
+                requestedModel: 'gemini-claude-opus-4-6-thinking',
+                selectedModel: 'gemini-claude-opus-4-6-thinking',
+                publicModelName: 'claude-opus-4-6',
+                usedFallback: false
+            });
+
+        expect(resolveAntigravityRequestModel('claude-sonnet-4-6', ['gemini-3-flash']))
+            .toMatchObject({
+                requestedModel: 'gemini-claude-sonnet-4-6',
+                selectedModel: 'gemini-3-flash',
+                publicModelName: 'gemini-3-flash',
+                usedFallback: true
+            });
     });
 
     test('normalizes Claude aliases for Gemini CLI and Kiro target models', () => {

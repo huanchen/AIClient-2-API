@@ -829,6 +829,19 @@ export function normalizeRequestedModelForProvider(providerType, model, supporte
     return normalizedModel;
 }
 
+export function resolveAntigravityRequestModel(model, availableModels = PROVIDER_MODELS[MODEL_PROVIDER.ANTIGRAVITY]) {
+    const requestedModel = normalizeRequestedModelForProvider(MODEL_PROVIDER.ANTIGRAVITY, model);
+    const modelList = Array.isArray(availableModels) ? availableModels : [];
+    const selectedModel = modelList.includes(requestedModel) ? requestedModel : 'gemini-3-flash';
+
+    return {
+        requestedModel,
+        selectedModel,
+        publicModelName: toPublicProviderModelId(MODEL_PROVIDER.ANTIGRAVITY, selectedModel),
+        usedFallback: selectedModel !== requestedModel
+    };
+}
+
 export function toPublicProviderModelId(providerType, model) {
     if (typeof model !== 'string') {
         return model;
