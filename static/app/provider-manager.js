@@ -19,6 +19,15 @@ let initialLoadTime = null;
 let isStaticProviderConfigsUpdated = false;
 let cachedSupportedProviders = null;
 
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 /**
  * 加载系统信息
  */
@@ -284,6 +293,13 @@ function renderProviders(providers, supportedProviders = []) {
         const totalCount = accounts.length;
         const usageCount = accounts.reduce((sum, acc) => sum + (acc.usageCount || 0), 0);
         const errorCount = accounts.reduce((sum, acc) => sum + (acc.errorCount || 0), 0);
+        const accountIdentifiers = [...new Set(
+            accounts
+                .map(acc => acc.accountIdentifier || acc.customName || acc.credentialsFileLabel)
+                .filter(Boolean)
+        )];
+        const accountPreview = accountIdentifiers.slice(0, 2);
+        const remainingAccountCount = Math.max(0, accountIdentifiers.length - accountPreview.length);
         
         totalAccounts += totalCount;
         totalHealthy += healthyCount;
@@ -329,6 +345,12 @@ function renderProviders(providers, supportedProviders = []) {
                     </div>
                 </div>
             </div>
+            ${accountPreview.length > 0 ? `
+            <div class="provider-account-preview">
+                <i class="fas fa-user-circle"></i>
+                <span>${accountPreview.map(item => escapeHtml(item)).join(' / ')}${remainingAccountCount > 0 ? ` ${escapeHtml(t('providers.account.previewMore', { count: remainingAccountCount }))}` : ''}</span>
+            </div>
+            ` : ''}
             <div class="provider-stats">
                 <div class="provider-stat">
                     <span class="provider-stat-label" data-i18n="providers.stat.totalAccounts">${t('providers.stat.totalAccounts')}</span>

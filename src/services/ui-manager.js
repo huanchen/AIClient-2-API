@@ -35,7 +35,17 @@ export async function serveStaticFiles(pathParam, res) {
             '.ico': 'image/x-icon'
         }[ext] || 'text/plain';
 
-        res.writeHead(200, { 'Content-Type': contentType });
+        const headers = { 'Content-Type': contentType };
+
+        // The admin UI loads component fragments like header.html via fetch().
+        // Without cache headers, browsers may keep serving stale HTML after an update.
+        if (['.html', '.js', '.css'].includes(ext)) {
+            headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0';
+            headers['Pragma'] = 'no-cache';
+            headers['Expires'] = '0';
+        }
+
+        res.writeHead(200, headers);
         res.end(readFileSync(filePath));
         return true;
     }

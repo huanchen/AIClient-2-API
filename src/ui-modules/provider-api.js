@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs';
+import path from 'path';
 import logger from '../utils/logger.js';
 import { getRequestBody } from '../utils/common.js';
 import {
@@ -8,7 +9,17 @@ import {
     normalizeModelIds,
     usesManagedModelList
 } from '../providers/provider-models.js';
-import { generateUUID, createProviderConfig, formatSystemPath, detectProviderFromPath, addToUsedPaths, isPathUsed, pathsEqual } from '../utils/provider-utils.js';
+import {
+    generateUUID,
+    createProviderConfig,
+    formatSystemPath,
+    detectProviderFromPath,
+    addToUsedPaths,
+    isPathUsed,
+    pathsEqual,
+    deriveProviderIdentityFromFile,
+    extractIdentityFromCredentialsData
+} from '../utils/provider-utils.js';
 import { broadcastEvent } from './event-broadcast.js';
 import { getRegisteredProviders, getServiceAdapter, serviceInstances } from '../providers/adapter.js';
 
@@ -24,7 +35,18 @@ function sanitizeProviderData(provider, maskSensitive = false) {
     if (maskSensitive) {
         for (const key in sanitized) {
             // 排除已知非敏感字段
-            if (key === 'uuid' || key === 'customName' || key === 'isHealthy' || key === 'isDisabled' || key === 'needsRefresh') continue;
+            if (
+                key === 'uuid' ||
+                key === 'customName' ||
+                key === 'isHealthy' ||
+                key === 'isDisabled' ||
+                key === 'needsRefresh' ||
+                key === 'accountIdentifier' ||
+                key === 'accountEmail' ||
+                key === 'accountId' ||
+                key === 'accountName' ||
+                key === 'credentialsFileLabel'
+            ) continue;
             
             const val = sanitized[key];
             if (typeof val !== 'string' || !val) continue;
@@ -69,6 +91,71 @@ function sanitizeProviderPools(pools, maskSensitive = false) {
             : providers;
     }
     return sanitized;
+}
+
+function resolveProviderFilePath(filePath) {
+    if (!filePath || typeof filePath !== 'string') return null;
+    return path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
+}
+
+function getProviderCredPathKey(providerType, provider = {}) {
+    if (!providerType && !provider) return null;
+
+    const typeToKey = {
+        'gemini-cli-oauth': 'GEMINI_OAUTH_CREDS_FILE_PATH',
+        'gemini-antigravity': 'ANTIGRAVITY_OAUTH_CREDS_FILE_PATH',
+        'claude-kiro-oauth': 'KIRO_OAUTH_CREDS_FILE_PATH',
+        'openai-qwen-oauth': 'QWEN_OAUTH_CREDS_FILE_PATH',
+        'openai-iflow': 'IFLOW_OAUTH_CREDS_FILE_PATH',
+        'openai-codex-oauth': 'CODEX_OAUTH_CREDS_FILE_PATH'
+    };
+
+    const matchedKey = Object.entries(typeToKey).find(([type]) => providerType === type || providerType?.startsWith(`${type}-`));
+    if (matchedKey) return matchedKey[1];
+
+    return Object.keys(provider).find(key => key.endsWith('OAUTH_CREDS_FILE_PATH')) || null;
+}
+
+function buildProviderAccountIdentity(providerType, provider) {
+    const credPathKey = getProviderCredPathKey(providerType, provider);
+    if (!credPathKey || !provider?.[credPathKey]) {
+        return provider;
+    }
+
+    const rawCredPath = provider[credPathKey];
+    const absoluteCredPath = resolveProviderFilePath(rawCredPath);
+    const fileLabel = path.basename(rawCredPath);
+
+    let identity = extractIdentityFromCredentialsData({}, rawCredPath);
+
+    try {
+        if (absoluteCredPath && existsSync(absoluteCredPath)) {
+            const raw = readFileSync(absoluteCredPath, 'utf-8');
+            const credentials = JSON.parse(raw);
+            identity = extractIdentityFromCredentialsData(credentials, rawCredPath);
+        }
+    } catch (error) {
+        logger.debug?.(`[UI API] Failed to extract account identity from ${rawCredPath}: ${error.message}`);
+    }
+
+    return {
+        ...provider,
+        accountIdentifier: identity.accountIdentifier || fileLabel,
+        accountEmail: identity.email || null,
+        accountId: identity.accountId || null,
+        accountName: identity.accountName || null,
+        credentialsFileLabel: identity.fileLabel || fileLabel
+    };
+}
+
+function enrichProviderPoolsForDisplay(pools = {}) {
+    const enriched = {};
+    for (const [providerType, providers] of Object.entries(pools)) {
+        enriched[providerType] = Array.isArray(providers)
+            ? providers.map(provider => buildProviderAccountIdentity(providerType, provider))
+            : providers;
+    }
+    return enriched;
 }
 
 /**
@@ -286,9 +373,11 @@ export async function handleGetProviders(req, res, currentConfig, providerPoolMa
     // 合并生成支持的类型列表
     const supportedProviders = [...new Set([...registeredProviders, ...poolTypes])];
 
+    const enrichedProviderStatus = enrichProviderPoolsForDisplay(providerStatus);
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-        providers: sanitizeProviderPools(providerStatus, true), // 列表显示进行打码
+        providers: sanitizeProviderPools(enrichedProviderStatus, true), // 列表显示进行打码
         supportedProviders: supportedProviders
     }));
     return true;
@@ -311,7 +400,7 @@ export async function handleGetProviderType(req, res, currentConfig, providerPoo
         logger.warn('[UI API] Failed to load provider pools:', error.message);
     }
 
-    const providers = providerPools[providerType] || [];
+    const providers = (providerPools[providerType] || []).map(provider => buildProviderAccountIdentity(providerType, provider));
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
         providerType,
@@ -1367,11 +1456,13 @@ export async function handleQuickLinkProvider(req, res, currentConfig, providerP
             }
 
             // Create new provider config based on provider type
+            const identity = await deriveProviderIdentityFromFile(currentFilePath);
             const newProvider = createProviderConfig({
                 credPathKey,
                 credPath: formatSystemPath(currentFilePath),
                 defaultCheckModel,
-                needsProjectId: providerMapping.needsProjectId
+                needsProjectId: providerMapping.needsProjectId,
+                customName: identity?.accountIdentifier || ''
             });
 
             providerPools[providerType].push(newProvider);

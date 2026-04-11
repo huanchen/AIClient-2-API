@@ -99,6 +99,21 @@
     color: var(--text-primary);
 }
 
+.provider-account-preview {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.provider-account-preview i {
+    opacity: 0.75;
+}
+
 .provider-header-right {
     display: flex;
     align-items: center;
@@ -622,6 +637,19 @@
     font-size: 15px;
 }
 
+.provider-account-meta {
+    font-size: 12px;
+    color: var(--neutral-600);
+    margin-bottom: 6px;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.provider-account-meta i {
+    opacity: 0.75;
+    margin-right: 4px;
+}
+
 .provider-meta {
     font-size: 13px;
     color: var(--neutral-500);
@@ -669,6 +697,22 @@
     word-break: break-word;
     max-height: 60px;
     overflow-y: auto;
+}
+
+.provider-identity-summary {
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--neutral-100) 0%, var(--neutral-50) 100%);
+    border: 1px solid var(--neutral-200);
+    font-size: 12px;
+    color: var(--neutral-700);
+    line-height: 1.5;
+}
+
+.provider-identity-summary strong {
+    color: var(--neutral-800);
+    margin-right: 6px;
 }
 
 .provider-actions-group {

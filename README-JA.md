@@ -6,19 +6,19 @@
 
 **複数のクライアント専用大規模言語モデルAPI（Gemini CLI、Antigravity、Codex, Grok、Kiro ...）を模擬リクエストし、ローカルのOpenAI互換インターフェースに統一的にラッピングする強力なプロキシ。**
 
-<a href="https://trendshift.io/repositories/15832" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15832" alt="justlovemaki%2FAIClient-2-API | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+<a href="https://trendshift.io/repositories/15832" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15832" alt="huanchen%2FAIClient-2-API | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </div>
 </div>
 
 <div align="center">
 
-<a href="https://deepwiki.com/justlovemaki/AIClient-2-API"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"  style="width: 134px; height: 23px;margin-bottom: 3px;"></a>
+<a href="https://deepwiki.com/huanchen/AIClient-2-API"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"  style="width: 134px; height: 23px;margin-bottom: 3px;"></a>
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Node.js](https://img.shields.io/badge/Node.js-≥20.0.0-green.svg)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/docker-≥20.0.0-blue.svg)](https://hub.docker.com/r/justlikemaki/aiclient-2-api)
-[![GitHub stars](https://img.shields.io/github/stars/justlovemaki/AIClient-2-API.svg?style=flat&label=Star)](https://github.com/justlovemaki/AIClient-2-API/stargazers)
-[![GitHub issues](https://img.shields.io/github/issues/justlovemaki/AIClient-2-API.svg)](https://github.com/justlovemaki/AIClient-2-API/issues)
+[![GitHub stars](https://img.shields.io/github/stars/huanchen/AIClient-2-API.svg?style=flat&label=Star)](https://github.com/huanchen/AIClient-2-API/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/huanchen/AIClient-2-API.svg)](https://github.com/huanchen/AIClient-2-API/issues)
 
 [**🔧 OpenClaw 設定**](./docs/OPENCLAW_CONFIG_GUIDE-JA.md) | [中文](./README-ZH.md) | [English](./README.md) | [**👉 日本語**](./README-JA.md) | [**📚 完全ドキュメント**](https://aiproxy.justlikemaki.vip/ja/)
 
@@ -730,13 +730,13 @@ kill -9 <PID>
 
 AIClient-2-APIプロジェクトに貢献してくれたすべての開発者に感謝します：
 
-[![Contributors](https://contrib.rocks/image?repo=justlovemaki/AIClient-2-API)](https://github.com/justlovemaki/AIClient-2-API/graphs/contributors)
+[![Contributors](https://contrib.rocks/image?repo=huanchen/AIClient-2-API)](https://github.com/huanchen/AIClient-2-API/graphs/contributors)
 
 
 ### 🌟 Star History
 
 
-[![Star History Chart](https://api.star-history.com/svg?repos=justlovemaki/AIClient-2-API&type=Timeline)](https://www.star-history.com/#justlovemaki/AIClient-2-API&Timeline)
+[![Star History Chart](https://api.star-history.com/svg?repos=huanchen/AIClient-2-API&type=Timeline)](https://www.star-history.com/#huanchen/AIClient-2-API&Timeline)
 
 ---
 

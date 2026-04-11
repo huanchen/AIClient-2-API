@@ -330,11 +330,12 @@ export async function isValidOAuthCredentials(filePath) {
  * @returns {Object} 新的提供商配置对象
  */
 export function createProviderConfig(options) {
-    const { credPathKey, credPath, defaultCheckModel, defaultCheckHealth, needsProjectId, urlKeys } = options;
+    const { credPathKey, credPath, defaultCheckModel, defaultCheckHealth, needsProjectId, urlKeys, customName } = options;
     
     const newProvider = {
         [credPathKey]: credPath,
         uuid: generateUUID(),
+        customName: customName || '',
         checkModelName: defaultCheckModel,
         checkHealth: defaultCheckHealth ?? false,
         isHealthy: true,
@@ -361,6 +362,78 @@ export function createProviderConfig(options) {
     }
     
     return newProvider;
+}
+
+export function extractIdentityFromCredentialsData(credentials = {}, filePath = '') {
+    const fileLabel = filePath ? path.basename(filePath) : '';
+    const nestedOpenAIAuth = credentials['https://api.openai.com/auth'] || {};
+    const nestedOpenAIProfile = credentials['https://api.openai.com/profile'] || {};
+
+    const email = credentials.email
+        || credentials.mail
+        || credentials?.user?.email
+        || credentials?.profile?.email
+        || credentials?.data?.email
+        || nestedOpenAIProfile.email
+        || null;
+
+    const phone = credentials.phone
+        || credentials?.data?.phone
+        || null;
+
+    const accountName = credentials.name
+        || credentials.username
+        || credentials.displayName
+        || credentials?.user?.name
+        || credentials?.profile?.name
+        || nestedOpenAIProfile.name
+        || null;
+
+    const accountId = credentials.account_id
+        || credentials.accountId
+        || credentials.user_id
+        || credentials.sub
+        || nestedOpenAIAuth.chatgpt_account_id
+        || null;
+
+    let providerLabel = null;
+    if (credentials.startUrl) {
+        try {
+            const parsed = new URL(credentials.startUrl);
+            providerLabel = `${credentials.authMethod || 'oauth'}@${parsed.hostname}`;
+        } catch {
+            providerLabel = credentials.startUrl;
+        }
+    } else if (credentials.provider || credentials.authMethod) {
+        providerLabel = [credentials.provider, credentials.authMethod].filter(Boolean).join(':');
+    }
+
+    const accountIdentifier = email || phone || accountName || accountId || providerLabel || fileLabel || null;
+
+    return {
+        accountIdentifier,
+        email,
+        phone,
+        accountId,
+        accountName,
+        providerLabel,
+        fileLabel
+    };
+}
+
+export async function deriveProviderIdentityFromFile(filePath) {
+    if (!filePath) return null;
+
+    const absolutePath = path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
+
+    try {
+        const raw = await fs.readFile(absolutePath, 'utf8');
+        const credentials = JSON.parse(raw);
+        return extractIdentityFromCredentialsData(credentials, filePath);
+    } catch (error) {
+        logger.debug?.(`[Provider Utils] Failed to derive provider identity from ${filePath}: ${error.message}`);
+        return extractIdentityFromCredentialsData({}, filePath);
+    }
 }
 
 /**

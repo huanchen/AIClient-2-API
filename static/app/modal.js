@@ -729,6 +729,9 @@ function renderProviderList(providers) {
     return providers.map(provider => {
         const isHealthy = provider.isHealthy;
         const isDisabled = provider.isDisabled || false;
+        const displayName = provider.customName || provider.accountIdentifier || provider.uuid;
+        const accountIdentifier = provider.accountIdentifier ? escapeHtml(provider.accountIdentifier) : '';
+        const credentialsFileLabel = provider.credentialsFileLabel ? escapeHtml(provider.credentialsFileLabel) : '';
         const lastUsed = provider.lastUsed ? new Date(provider.lastUsed).toLocaleString() : t('modal.provider.neverUsed');
         const lastHealthCheckTime = provider.lastHealthCheckTime ? new Date(provider.lastHealthCheckTime).toLocaleString() : t('modal.provider.neverChecked');
         const lastHealthCheckModel = provider.lastHealthCheckModel || '-';
@@ -761,9 +764,15 @@ function renderProviderList(providers) {
                 <div class="provider-item-header" onclick="window.toggleProviderDetails('${provider.uuid}')">
                     <div class="provider-info">
                         <div class="provider-name">
-                            ${provider.customName || provider.uuid}
+                            ${escapeHtml(displayName)}
                             ${needsRefresh ? `<span class="badge badge-warning" style="font-size: 10px; margin-left: 8px; vertical-align: middle;"><i class="fas fa-sync-alt fa-spin"></i> <span data-i18n="providers.status.needsRefresh">${t('providers.status.needsRefresh')}</span></span>` : ''}
                         </div>
+                        ${accountIdentifier ? `
+                        <div class="provider-account-meta">
+                            <span><i class="fas fa-user-circle"></i> ${escapeHtml(t('modal.provider.accountLabel'))}: ${accountIdentifier}</span>
+                            ${credentialsFileLabel ? `<span> | <i class="fas fa-file-alt"></i> ${escapeHtml(t('modal.provider.credentialsFileLabel'))}: ${credentialsFileLabel}</span>` : ''}
+                        </div>
+                        ` : ''}
                         <div class="provider-meta">
                             <span class="health-status">
                                 <i class="${healthIcon}"></i>
@@ -825,12 +834,28 @@ function renderProviderList(providers) {
 function renderProviderConfig(provider) {
     // 获取该提供商类型的所有字段定义（从 utils.js）
     const fieldConfigs = getProviderTypeFields(currentProviderType);
+    const accountIdentifier = provider.accountIdentifier ? escapeHtml(provider.accountIdentifier) : '';
+    const accountEmail = provider.accountEmail ? escapeHtml(provider.accountEmail) : '';
+    const accountId = provider.accountId ? escapeHtml(provider.accountId) : '';
+    const credentialsFileLabel = provider.credentialsFileLabel ? escapeHtml(provider.credentialsFileLabel) : '';
     
     // 获取字段显示顺序
     const fieldOrder = getFieldOrder(provider);
     
     // 先渲染基础配置字段（customName、checkModelName 和 checkHealth）
-    let html = '<div class="form-grid">';
+    let html = '';
+    if (accountIdentifier || credentialsFileLabel) {
+        html += `
+            <div class="provider-identity-summary">
+                ${accountIdentifier ? `<div><strong>${escapeHtml(t('modal.provider.identityLabel'))}:</strong> ${accountIdentifier}</div>` : ''}
+                ${accountEmail ? `<div><strong>${escapeHtml(t('modal.provider.emailLabel'))}:</strong> ${accountEmail}</div>` : ''}
+                ${accountId ? `<div><strong>${escapeHtml(t('modal.provider.accountIdLabel'))}:</strong> ${accountId}</div>` : ''}
+                ${credentialsFileLabel ? `<div><strong>${escapeHtml(t('modal.provider.credentialsFileLabel'))}:</strong> ${credentialsFileLabel}</div>` : ''}
+            </div>
+        `;
+    }
+
+    html += '<div class="form-grid">';
     const baseFields = ['customName', 'checkModelName', 'checkHealth', 'concurrencyLimit', 'queueLimit'];
     
     baseFields.forEach(fieldKey => {
@@ -1064,7 +1089,8 @@ function getFieldOrder(provider) {
     const excludedFields = [
         'isHealthy', 'lastUsed', 'usageCount', 'errorCount', 'lastErrorTime',
         'uuid', 'isDisabled', 'lastHealthCheckTime', 'lastHealthCheckModel', 'lastErrorMessage',
-        'notSupportedModels', 'supportedModels', 'refreshCount', 'needsRefresh', '_lastSelectionSeq'
+        'notSupportedModels', 'supportedModels', 'refreshCount', 'needsRefresh', '_lastSelectionSeq',
+        'accountIdentifier', 'accountEmail', 'accountId', 'accountName', 'credentialsFileLabel'
     ];
     
     // 尝试从当前模态框上下文中获取提供商类型

@@ -9,7 +9,7 @@ import { parseProxyUrl } from '../utils/proxy-utils.js';
 import { getRequestBody } from '../utils/common.js';
 
 const execAsync = promisify(exec);
-const GITHUB_REPO = 'justlovemaki/AIClient-2-API';
+const GITHUB_REPO = 'huanchen/AIClient-2-API';
 
 function buildGitHubApiCandidates(repo) {
     const apiPath = `repos/${repo}/tags`;
