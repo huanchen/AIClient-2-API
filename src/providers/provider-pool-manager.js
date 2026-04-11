@@ -9,6 +9,7 @@ import {
     getProviderModels,
     normalizeModelIds,
     providerSupportsModel,
+    setClientModelRoutingRules,
     toPublicProviderModelList
 } from './provider-models.js';
 import { broadcastEvent } from '../ui-modules/event-broadcast.js';
@@ -44,6 +45,7 @@ export class ProviderPoolManager {
     };
 
     constructor(providerPools, options = {}) {
+        setClientModelRoutingRules(options.globalConfig?.clientModelRoutingRules || {});
         this.providerPools = providerPools;
         this.globalConfig = options.globalConfig || {}; // 存储全局配置
         this.providerStatus = {}; // Tracks health and usage for each provider instance

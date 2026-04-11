@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { CONFIG } from '../core/config-manager.js';
 import { serviceInstances } from '../providers/adapter.js';
 import { initApiService } from '../services/service-manager.js';
+import { getEffectiveClientModelRoutingRules } from '../providers/provider-models.js';
 import { getRequestBody } from '../utils/common.js';
 import { broadcastEvent } from '../ui-modules/event-broadcast.js';
 import { HEALTH_CHECK, PASSWORD, NETWORK, RETRY } from '../utils/constants.js';
@@ -82,6 +83,7 @@ export async function handleGetConfig(req, res, currentConfig) {
         REFRESH_CONCURRENCY_PER_PROVIDER: currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER,
         providerFallbackChain: currentConfig.providerFallbackChain,
         modelFallbackMapping: currentConfig.modelFallbackMapping,
+        clientModelRoutingRules: getEffectiveClientModelRoutingRules(currentConfig.clientModelRoutingRules),
         PROXY_URL: currentConfig.PROXY_URL,
         PROXY_ENABLED_PROVIDERS: currentConfig.PROXY_ENABLED_PROVIDERS,
         TLS_SIDECAR_ENABLED: currentConfig.TLS_SIDECAR_ENABLED,
@@ -97,6 +99,7 @@ export async function handleGetConfig(req, res, currentConfig) {
         LOG_MAX_FILE_SIZE: currentConfig.LOG_MAX_FILE_SIZE,
         LOG_MAX_FILES: currentConfig.LOG_MAX_FILES,
         SCHEDULED_HEALTH_CHECK: currentConfig.SCHEDULED_HEALTH_CHECK,
+        sessionAffinity: currentConfig.sessionAffinity,
         // 脱敏：只返回是否设置了 API Key，不返回原文
         REQUIRED_API_KEY: currentConfig.REQUIRED_API_KEY ? '******' : '',
         systemPrompt,
@@ -176,6 +179,11 @@ export async function handleUpdateConfig(req, res, currentConfig) {
         if (newConfig.REFRESH_CONCURRENCY_PER_PROVIDER !== undefined) currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER = newConfig.REFRESH_CONCURRENCY_PER_PROVIDER;
         if (newConfig.providerFallbackChain !== undefined) currentConfig.providerFallbackChain = newConfig.providerFallbackChain;
         if (newConfig.modelFallbackMapping !== undefined) currentConfig.modelFallbackMapping = newConfig.modelFallbackMapping;
+        if (newConfig.clientModelRoutingRules !== undefined) {
+            currentConfig.clientModelRoutingRules = newConfig.clientModelRoutingRules && typeof newConfig.clientModelRoutingRules === 'object' && !Array.isArray(newConfig.clientModelRoutingRules)
+                ? newConfig.clientModelRoutingRules
+                : {};
+        }
         
         // Proxy settings
         if (newConfig.PROXY_URL !== undefined) currentConfig.PROXY_URL = newConfig.PROXY_URL;
@@ -217,6 +225,14 @@ export async function handleUpdateConfig(req, res, currentConfig) {
         if (newConfig.LOG_INCLUDE_TIMESTAMP !== undefined) currentConfig.LOG_INCLUDE_TIMESTAMP = newConfig.LOG_INCLUDE_TIMESTAMP;
         if (newConfig.LOG_MAX_FILE_SIZE !== undefined) currentConfig.LOG_MAX_FILE_SIZE = newConfig.LOG_MAX_FILE_SIZE;
         if (newConfig.LOG_MAX_FILES !== undefined) currentConfig.LOG_MAX_FILES = newConfig.LOG_MAX_FILES;
+
+        // 会话粘连配置
+        if (newConfig.sessionAffinity !== undefined) {
+            currentConfig.sessionAffinity = {
+                ...currentConfig.sessionAffinity,
+                ...newConfig.sessionAffinity
+            };
+        }
 
         // Scheduled Health Check settings
         if (newConfig.SCHEDULED_HEALTH_CHECK !== undefined) {
@@ -309,6 +325,7 @@ export async function handleUpdateConfig(req, res, currentConfig) {
                 REFRESH_CONCURRENCY_PER_PROVIDER: currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER,
                 providerFallbackChain: currentConfig.providerFallbackChain,
                 modelFallbackMapping: currentConfig.modelFallbackMapping,
+                clientModelRoutingRules: currentConfig.clientModelRoutingRules,
                 PROXY_URL: currentConfig.PROXY_URL,
                 PROXY_ENABLED_PROVIDERS: currentConfig.PROXY_ENABLED_PROVIDERS,
                 LOG_ENABLED: currentConfig.LOG_ENABLED,
@@ -323,7 +340,8 @@ export async function handleUpdateConfig(req, res, currentConfig) {
                 TLS_SIDECAR_ENABLED_PROVIDERS: currentConfig.TLS_SIDECAR_ENABLED_PROVIDERS,
                 TLS_SIDECAR_PORT: currentConfig.TLS_SIDECAR_PORT,
                 TLS_SIDECAR_PROXY_URL: currentConfig.TLS_SIDECAR_PROXY_URL,
-                SCHEDULED_HEALTH_CHECK: currentConfig.SCHEDULED_HEALTH_CHECK
+                SCHEDULED_HEALTH_CHECK: currentConfig.SCHEDULED_HEALTH_CHECK,
+                sessionAffinity: currentConfig.sessionAffinity
             };
 
             writeFileSync(configPath, JSON.stringify(configToSave, null, 2), 'utf-8');

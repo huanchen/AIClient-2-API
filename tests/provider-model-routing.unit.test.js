@@ -15,15 +15,17 @@ jest.mock('../src/providers/adapter.js', () => ({
 }));
 
 import { ProviderPoolManager } from '../src/providers/provider-pool-manager.js';
+import { resetClientModelRoutingRules } from '../src/providers/provider-models.js';
 
 const managedInstances = [];
 
-function createManager(providerPools) {
+function createManager(providerPools, globalConfig = {}) {
     const manager = new ProviderPoolManager(providerPools, {
         saveDebounceTime: 600000,
         globalConfig: {
             PROVIDER_POOLS_FILE_PATH: 'tests/.tmp-provider-model-routing.json',
-            providerFallbackChain: {}
+            providerFallbackChain: {},
+            ...globalConfig
         }
     });
 
@@ -38,6 +40,7 @@ function createManager(providerPools) {
 
 afterEach(() => {
     jest.restoreAllMocks();
+    resetClientModelRoutingRules();
     for (const manager of managedInstances.splice(0)) {
         if (manager.cleanupTimer) {
             clearInterval(manager.cleanupTimer);
@@ -146,5 +149,37 @@ describe('provider model routing aliases', () => {
 
         expect(selected).not.toBeNull();
         expect(selected.uuid).toBe('openai-1');
+    });
+
+    test('configurable routing rules change provider-side model compatibility checks', async () => {
+        const providerPools = {
+            'gemini-cli-oauth': [
+                {
+                    uuid: 'gem-override',
+                    isHealthy: true,
+                    isDisabled: false,
+                    needsRefresh: false,
+                    notSupportedModels: ['gemini-3.1-pro-preview']
+                }
+            ]
+        };
+
+        const defaultManager = createManager(providerPools);
+        const defaultSelected = await defaultManager.selectProvider('gemini-cli-oauth', 'claude-sonnet-4-6');
+
+        const overriddenManager = createManager(providerPools, {
+            clientModelRoutingRules: {
+                providerTargets: {
+                    geminiCli: {
+                        defaultModel: 'gemini-2.5-flash'
+                    }
+                }
+            }
+        });
+        const overriddenSelected = await overriddenManager.selectProvider('gemini-cli-oauth', 'claude-sonnet-4-6');
+
+        expect(defaultSelected).toBeNull();
+        expect(overriddenSelected).not.toBeNull();
+        expect(overriddenSelected.uuid).toBe('gem-override');
     });
 });

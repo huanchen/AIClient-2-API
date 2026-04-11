@@ -252,6 +252,7 @@ async function loadConfiguration() {
         const refreshConcurrencyPerProviderEl = document.getElementById('refreshConcurrencyPerProvider');
         const providerFallbackChainEl = document.getElementById('providerFallbackChain');
         const modelFallbackMappingEl = document.getElementById('modelFallbackMapping');
+        const clientModelRoutingRulesEl = document.getElementById('clientModelRoutingRules');
 
         if (systemPromptFilePathEl) systemPromptFilePathEl.value = data.SYSTEM_PROMPT_FILE_PATH || 'configs/input_system_prompt.txt';
         if (systemPromptModeEl) systemPromptModeEl.value = data.SYSTEM_PROMPT_MODE || 'append';
@@ -271,7 +272,37 @@ async function loadConfiguration() {
         if (maxErrorCountEl) maxErrorCountEl.value = data.MAX_ERROR_COUNT || 10;
         if (warmupTargetEl) warmupTargetEl.value = data.WARMUP_TARGET || 0;
         if (refreshConcurrencyPerProviderEl) refreshConcurrencyPerProviderEl.value = data.REFRESH_CONCURRENCY_PER_PROVIDER || 1;
-        
+
+        // 加载会话粘连配置
+        const sessionAffinityEnabledEl = document.getElementById('sessionAffinityEnabled');
+        if (sessionAffinityEnabledEl) {
+            if (data.sessionAffinity && data.sessionAffinity.sessionAffinityEnabled !== undefined) {
+                sessionAffinityEnabledEl.checked = data.sessionAffinity.sessionAffinityEnabled;
+            } else {
+                sessionAffinityEnabledEl.checked = true; // 默认启用
+            }
+        }
+        const sessionAffinityDefaultWeakTtlEl = document.getElementById('sessionAffinityDefaultWeakTtl');
+        if (sessionAffinityDefaultWeakTtlEl) {
+            sessionAffinityDefaultWeakTtlEl.value = data.sessionAffinity?.defaultWeakTtlMs || 1800000;
+        }
+        const sessionAffinityDefault5xxCoolDownMsEl = document.getElementById('sessionAffinityDefault5xxCoolDownMs');
+        if (sessionAffinityDefault5xxCoolDownMsEl) {
+            sessionAffinityDefault5xxCoolDownMsEl.value = data.sessionAffinity?.default5xxCoolDownMs || 60000;
+        }
+        const sessionAffinityMax429CoolDownMsEl = document.getElementById('sessionAffinityMax429CoolDownMs');
+        if (sessionAffinityMax429CoolDownMsEl) {
+            sessionAffinityMax429CoolDownMsEl.value = data.sessionAffinity?.max429CoolDownMs || 3600000;
+        }
+        const sessionAffinityMaxSessionsEl = document.getElementById('sessionAffinityMaxSessions');
+        if (sessionAffinityMaxSessionsEl) {
+            sessionAffinityMaxSessionsEl.value = data.sessionAffinity?.maxSessions || 10000;
+        }
+        const sessionAffinityVirtualNodesEl = document.getElementById('sessionAffinityVirtualNodes');
+        if (sessionAffinityVirtualNodesEl) {
+            sessionAffinityVirtualNodesEl.value = data.sessionAffinity?.virtualNodesPerNode || 150;
+        }
+
         // 加载 Fallback 链配置
         if (providerFallbackChainEl) {
             if (data.providerFallbackChain && typeof data.providerFallbackChain === 'object') {
@@ -287,6 +318,14 @@ async function loadConfiguration() {
                 modelFallbackMappingEl.value = JSON.stringify(data.modelFallbackMapping, null, 2);
             } else {
                 modelFallbackMappingEl.value = '';
+            }
+        }
+
+        if (clientModelRoutingRulesEl) {
+            if (data.clientModelRoutingRules && typeof data.clientModelRoutingRules === 'object') {
+                clientModelRoutingRulesEl.value = JSON.stringify(data.clientModelRoutingRules, null, 2);
+            } else {
+                clientModelRoutingRulesEl.value = '';
             }
         }
         
@@ -458,7 +497,17 @@ async function saveConfiguration() {
     config.MAX_ERROR_COUNT = parseInt(document.getElementById('maxErrorCount')?.value || 10);
     config.WARMUP_TARGET = parseInt(document.getElementById('warmupTarget')?.value || 0);
     config.REFRESH_CONCURRENCY_PER_PROVIDER = parseInt(document.getElementById('refreshConcurrencyPerProvider')?.value || 1);
-    
+
+    // 保存会话粘连配置
+    config.sessionAffinity = {
+        sessionAffinityEnabled: document.getElementById('sessionAffinityEnabled')?.checked ?? true,
+        defaultWeakTtlMs: parseInt(document.getElementById('sessionAffinityDefaultWeakTtl')?.value || 1800000),
+        default5xxCoolDownMs: parseInt(document.getElementById('sessionAffinityDefault5xxCoolDownMs')?.value || 60000),
+        max429CoolDownMs: parseInt(document.getElementById('sessionAffinityMax429CoolDownMs')?.value || 3600000),
+        maxSessions: parseInt(document.getElementById('sessionAffinityMaxSessions')?.value || 10000),
+        virtualNodesPerNode: parseInt(document.getElementById('sessionAffinityVirtualNodes')?.value || 150),
+    };
+
     // 保存 Fallback 链配置
     const fallbackChainValue = document.getElementById('providerFallbackChain')?.value?.trim() || '';
     if (fallbackChainValue) {
@@ -483,6 +532,18 @@ async function saveConfiguration() {
         }
     } else {
         config.modelFallbackMapping = {};
+    }
+
+    const clientModelRoutingRulesValue = document.getElementById('clientModelRoutingRules')?.value?.trim() || '';
+    if (clientModelRoutingRulesValue) {
+        try {
+            config.clientModelRoutingRules = JSON.parse(clientModelRoutingRulesValue);
+        } catch (e) {
+            showToast(t('common.error'), '客户端模型路由表格式无效，请输入有效的 JSON', 'error');
+            return;
+        }
+    } else {
+        config.clientModelRoutingRules = {};
     }
     
     // 保存代理配置

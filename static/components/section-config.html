@@ -197,6 +197,55 @@
                     <label for="modelFallbackMapping" data-i18n="config.advanced.modelFallbackMapping">跨协议模型 Fallback 映射 (JSON)</label>
                     <textarea id="modelFallbackMapping" class="form-control" rows="4" data-i18n-placeholder="config.advanced.modelFallbackMappingPlaceholder"></textarea>
                 </div>
+                <div class="form-group pool-section">
+                    <label for="clientModelRoutingRules">客户端模型路由表 (JSON)</label>
+                    <textarea id="clientModelRoutingRules" class="form-control" rows="10" placeholder="治理 Claude / Codex 客户端模型名到上游真实模型的映射表"></textarea>
+                    <small class="form-text">支持同时配置 `claude` / `openai` 协议别名、Codex/Claude 到 Gemini/Claude/OpenAI/Grok 的预路由规则，以及 `-1M` 这类客户端别名。</small>
+                </div>
+            </div>
+
+            <!-- 会话粘连与负载均衡 -->
+            <div class="config-group-section">
+                <h3 data-i18n="config.sessionAffinity.title"><i class="fas fa-link"></i> 会话粘连与负载均衡</h3>
+                <div class="config-row">
+                    <div class="form-group">
+                        <span data-i18n="config.sessionAffinity.enabled">启用会话粘连</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="sessionAffinityEnabled" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <small class="form-text" data-i18n="config.sessionAffinity.enabledNote">同一会话（多轮对话）尽量绑定到同一个节点，提高缓存命中率和稳定性</small>
+                    </div>
+                </div>
+                <div class="config-row">
+                    <div class="form-group">
+                        <label for="sessionAffinityDefaultWeakTtl" data-i18n="config.sessionAffinity.defaultWeakTtl">弱会话TTL(毫秒)</label>
+                        <input type="number" id="sessionAffinityDefaultWeakTtl" class="form-control" min="0" max="86400000" step="60000" value="1800000">
+                        <small class="form-text" data-i18n="config.sessionAffinity.defaultWeakTtlNote">基于API key+IP+UA识别的弱会话默认过期时间，默认 1800000 = 30分钟</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="sessionAffinityDefault5xxCoolDownMs" data-i18n="config.sessionAffinity.default5xxCoolDown">5xx 冷却时间(毫秒)</label>
+                        <input type="number" id="sessionAffinityDefault5xxCoolDownMs" class="form-control" min="0" max="3600000" step="1000" value="60000">
+                        <small class="form-text" data-i18n="config.sessionAffinity.default5xxCoolDownNote">服务端错误后节点冷却时间，默认 60000 = 1分钟</small>
+                    </div>
+                </div>
+                <div class="config-row">
+                    <div class="form-group">
+                        <label for="sessionAffinityMax429CoolDownMs" data-i18n="config.sessionAffinity.max429CoolDown">429 最大冷却时间(毫秒)</label>
+                        <input type="number" id="sessionAffinityMax429CoolDownMs" class="form-control" min="0" max="3600000" step="60000" value="3600000">
+                        <small class="form-text" data-i18n="config.sessionAffinity.max429CoolDownNote">限流错误指数退避最大冷却时间，默认 3600000 = 1小时</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="sessionAffinityMaxSessions" data-i18n="config.sessionAffinity.maxSessions">最大缓存会话数</label>
+                        <input type="number" id="sessionAffinityMaxSessions" class="form-control" min="100" max="100000" value="10000">
+                        <small class="form-text" data-i18n="config.sessionAffinity.maxSessionsNote">内存中缓存的最大会话数量，超出LRU淘汰</small>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="sessionAffinityVirtualNodes" data-i18n="config.sessionAffinity.virtualNodes">一致性哈希虚拟节点数</label>
+                    <input type="number" id="sessionAffinityVirtualNodes" class="form-control" min="1" max="500" value="150">
+                    <small class="form-text" data-i18n="config.sessionAffinity.virtualNodesNote">每个物理节点对应多少虚拟节点，越大分布越均匀，默认150</small>
+                </div>
             </div>
 
             <!-- OAuth 与令牌 -->

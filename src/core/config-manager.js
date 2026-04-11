@@ -84,6 +84,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
             startupRun: false
         },
         providerFallbackChain: {}, // 跨类型 Fallback 链配置
+        clientModelRoutingRules: {}, // 客户端模型名到上游模型的预路由配置
         LOG_ENABLED: true,
         LOG_OUTPUT_MODE: "all",
         LOG_LEVEL: "info",

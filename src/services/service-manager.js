@@ -1,6 +1,7 @@
 import { getServiceAdapter, serviceInstances } from '../providers/adapter.js';
 import logger from '../utils/logger.js';
 import { ProviderPoolManager } from '../providers/provider-pool-manager.js';
+import { setClientModelRoutingRules } from '../providers/provider-models.js';
 import deepmerge from 'deepmerge';
 import * as fs from 'fs';
 import { promises as pfs } from 'fs';
@@ -9,6 +10,7 @@ import {
     PROVIDER_MAPPINGS,
     createProviderConfig,
     addToUsedPaths,
+    deriveProviderIdentityFromFile,
     isPathUsed,
     getFileName,
     formatSystemPath
@@ -182,11 +184,13 @@ async function linkSingleCredential(config, credPath) {
         }
         
         // 创建新的提供商配置
+        const identity = await deriveProviderIdentityFromFile(absolutePath);
         const newProvider = createProviderConfig({
             credPathKey,
             credPath: formatSystemPath(relativePath),
             defaultCheckModel,
-            needsProjectId
+            needsProjectId,
+            customName: identity?.accountIdentifier || ''
         });
         
         // 添加到配置
@@ -236,11 +240,13 @@ async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options
                     
                     if (!isLinked) {
                         // 使用公共方法创建新的提供商配置
+                        const identity = await deriveProviderIdentityFromFile(fullPath);
                         const newProvider = createProviderConfig({
                             credPathKey,
                             credPath: formatSystemPath(relativePath),
                             defaultCheckModel,
-                            needsProjectId
+                            needsProjectId,
+                            customName: identity?.accountIdentifier || ''
                         });
                         
                         newProviders.push(newProvider);
@@ -268,6 +274,7 @@ async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options
  * @returns {Promise<Object>} The initialized services
  */
 export async function initApiService(config, isReady = false) {
+    setClientModelRoutingRules(config.clientModelRoutingRules || {});
 
     // Initialize or update ProviderPoolManager
     if (providerPoolManager) {

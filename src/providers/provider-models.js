@@ -125,125 +125,204 @@ export const MANAGED_MODEL_LIST_PROVIDERS = [
     'claude-custom'
 ];
 
-const CLAUDE_PROTOCOL_MODEL_ALIASES = {
-    'claude-sonnet-4-6': [
-        'claude-sonnet-4-6',
-        'claude-sonnet-4.6',
-        'gemini-claude-sonnet-4-6',
-        'default',
-        'default (recommended)',
-        'sonnet',
-        'sonnet (1m context)',
-        'sonnet-1m',
-        'sonnet 1m',
-        'claude-sonnet-4-6-1m',
-        'claude-sonnet-4.6-1m'
-    ],
-    'claude-opus-4-6': [
-        'claude-opus-4-6',
-        'claude-opus-4.6',
-        'claude-opus-4-6-thinking',
-        'claude-opus-4.6-thinking',
-        'gemini-claude-opus-4-6-thinking',
-        'opus',
-        'opus (1m context)',
-        'opus-1m',
-        'opus 1m',
-        'claude-opus-4-6-1m',
-        'claude-opus-4.6-1m'
-    ],
-    'claude-haiku-4-5': [
-        'claude-haiku-4-5',
-        'claude-haiku-4.5',
-        'claude-haiku-4-5-20251001',
-        'haiku'
-    ],
-    'claude-sonnet-4-5': [
-        'claude-sonnet-4-5',
-        'claude-sonnet-4.5',
-        'claude-sonnet-4-5-20250929',
-        'claude-sonnet-4-20250514'
-    ],
-    'claude-opus-4-5': [
-        'claude-opus-4-5',
-        'claude-opus-4.5',
-        'claude-opus-4-5-20251101'
-    ]
+export const DEFAULT_CLIENT_MODEL_ROUTING_RULES = {
+    protocolModelAliases: {
+        claude: {
+            'claude-sonnet-4-6': [
+                'claude-sonnet-4-6',
+                'claude-sonnet-4.6',
+                'gemini-claude-sonnet-4-6',
+                'default',
+                'default (recommended)',
+                'sonnet',
+                'sonnet (1m context)',
+                'sonnet-1m',
+                'sonnet 1m',
+                'claude-sonnet-4-6-1m',
+                'claude-sonnet-4.6-1m'
+            ],
+            'claude-opus-4-6': [
+                'claude-opus-4-6',
+                'claude-opus-4.6',
+                'claude-opus-4-6-thinking',
+                'claude-opus-4.6-thinking',
+                'gemini-claude-opus-4-6-thinking',
+                'opus',
+                'opus (1m context)',
+                'opus-1m',
+                'opus 1m',
+                'claude-opus-4-6-1m',
+                'claude-opus-4.6-1m'
+            ],
+            'claude-haiku-4-5': [
+                'claude-haiku-4-5',
+                'claude-haiku-4.5',
+                'claude-haiku-4-5-20251001',
+                'haiku'
+            ],
+            'claude-sonnet-4-5': [
+                'claude-sonnet-4-5',
+                'claude-sonnet-4.5',
+                'claude-sonnet-4-5-20250929',
+                'claude-sonnet-4-20250514'
+            ],
+            'claude-opus-4-5': [
+                'claude-opus-4-5',
+                'claude-opus-4.5',
+                'claude-opus-4-5-20251101'
+            ]
+        },
+        openai: {
+            'gpt-5.3-codex': [
+                'gpt-5.3-codex',
+                'gpt-5.3-codex (default)'
+            ],
+            'gpt-5.4': [
+                'gpt-5.4',
+                'gpt-5.4 (current)'
+            ]
+        }
+    },
+    providerModelAliases: {
+        claude: {
+            'claude-sonnet-4-6': [
+                'claude-sonnet-4-6',
+                'claude-sonnet-4.6',
+                'gemini-claude-sonnet-4-6',
+                'sonnet (1m context)',
+                'sonnet-1m',
+                'sonnet 1m',
+                'claude-sonnet-4-6-1m',
+                'claude-sonnet-4.6-1m'
+            ],
+            'claude-opus-4-6': [
+                'claude-opus-4-6',
+                'claude-opus-4.6',
+                'claude-opus-4-6-thinking',
+                'claude-opus-4.6-thinking',
+                'gemini-claude-opus-4-6-thinking',
+                'opus (1m context)',
+                'opus-1m',
+                'opus 1m',
+                'claude-opus-4-6-1m',
+                'claude-opus-4.6-1m'
+            ],
+            'claude-haiku-4-5': [
+                'claude-haiku-4-5',
+                'claude-haiku-4.5',
+                'claude-haiku-4-5-20251001'
+            ],
+            'claude-sonnet-4-5': [
+                'claude-sonnet-4-5',
+                'claude-sonnet-4.5',
+                'claude-sonnet-4-5-20250929',
+                'claude-sonnet-4-20250514'
+            ],
+            'claude-opus-4-5': [
+                'claude-opus-4-5',
+                'claude-opus-4.5',
+                'claude-opus-4-5-20251101'
+            ]
+        }
+    },
+    providerTargets: {
+        openaiCompatible: {
+            defaultModel: 'gpt-5.4'
+        },
+        geminiCli: {
+            defaultModel: 'gemini-3.1-pro-preview'
+        },
+        kiro: {
+            defaultModel: 'claude-sonnet-4-5',
+            haikuModel: 'claude-haiku-4-5'
+        },
+        grokCompatible: {
+            defaultModel: 'grok-4.20'
+        },
+        antigravity: {
+            sonnetModel: 'claude-sonnet-4-6',
+            opusModel: 'claude-opus-4-6'
+        },
+        codexToClaude: {
+            highCapabilityModel: 'gpt-5.4',
+            supportedClientModels: [
+                'gpt-5.3-codex',
+                'gpt-5.4'
+            ],
+            highCapabilityPreferredModels: [
+                'claude-opus-4-6',
+                'claude-opus-4-5-20251101',
+                'claude-opus-4-5',
+                'claude-sonnet-4-6',
+                'claude-sonnet-4-5-20250929',
+                'claude-sonnet-4-5',
+                'claude-sonnet-4-20250514',
+                'claude-3-7-sonnet-20250219'
+            ],
+            standardPreferredModels: [
+                'claude-sonnet-4-6',
+                'claude-sonnet-4-5-20250929',
+                'claude-sonnet-4-5',
+                'claude-sonnet-4-20250514',
+                'claude-3-7-sonnet-20250219'
+            ]
+        }
+    },
+    antigravityAliases: {
+        'claude-sonnet-4-6': {
+            internal: 'gemini-claude-sonnet-4-6',
+            public: 'claude-sonnet-4-6',
+            equivalents: ['claude-sonnet-4-6', 'gemini-claude-sonnet-4-6']
+        },
+        'claude-opus-4-6': {
+            internal: 'gemini-claude-opus-4-6-thinking',
+            public: 'claude-opus-4-6',
+            equivalents: ['claude-opus-4-6', 'claude-opus-4-6-thinking', 'gemini-claude-opus-4-6-thinking']
+        }
+    }
 };
 
-const CLAUDE_PROVIDER_MODEL_ALIASES = {
-    'claude-sonnet-4-6': [
-        'claude-sonnet-4-6',
-        'claude-sonnet-4.6',
-        'gemini-claude-sonnet-4-6',
-        'sonnet (1m context)',
-        'sonnet-1m',
-        'sonnet 1m',
-        'claude-sonnet-4-6-1m',
-        'claude-sonnet-4.6-1m'
-    ],
-    'claude-opus-4-6': [
-        'claude-opus-4-6',
-        'claude-opus-4.6',
-        'claude-opus-4-6-thinking',
-        'claude-opus-4.6-thinking',
-        'gemini-claude-opus-4-6-thinking',
-        'opus (1m context)',
-        'opus-1m',
-        'opus 1m',
-        'claude-opus-4-6-1m',
-        'claude-opus-4.6-1m'
-    ],
-    'claude-haiku-4-5': [
-        'claude-haiku-4-5',
-        'claude-haiku-4.5',
-        'claude-haiku-4-5-20251001'
-    ],
-    'claude-sonnet-4-5': [
-        'claude-sonnet-4-5',
-        'claude-sonnet-4.5',
-        'claude-sonnet-4-5-20250929',
-        'claude-sonnet-4-20250514'
-    ],
-    'claude-opus-4-5': [
-        'claude-opus-4-5',
-        'claude-opus-4.5',
-        'claude-opus-4-5-20251101'
-    ]
-};
+function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
 
-const CODEX_PROTOCOL_MODEL_ALIASES = {
-    'gpt-5.3-codex': [
-        'gpt-5.3-codex',
-        'gpt-5.3-codex (default)'
-    ],
-    'gpt-5.4': [
-        'gpt-5.4',
-        'gpt-5.4 (current)'
-    ]
-};
+function cloneRuleValue(value) {
+    if (Array.isArray(value)) {
+        return value.map(item => cloneRuleValue(item));
+    }
 
-const OPENAI_UPSTREAM_DEFAULT_MODEL = 'gpt-5.4';
-const GEMINI_UPSTREAM_DEFAULT_MODEL = 'gemini-3.1-pro-preview';
-const KIRO_UPSTREAM_DEFAULT_MODEL = 'claude-sonnet-4-5';
-const GROK_UPSTREAM_DEFAULT_MODEL = 'grok-4.20';
-const CODEX_HIGH_CAPABILITY_MODEL = 'gpt-5.4';
-const SUPPORTED_CODEX_CLIENT_MODELS = new Set([
-    'gpt-5.3-codex',
-    'gpt-5.4'
-]);
-const CLAUDE_OPUS_MODEL_PREFERENCES = [
-    'claude-opus-4-6',
-    'claude-opus-4-5-20251101',
-    'claude-opus-4-5'
-];
-const CLAUDE_SONNET_MODEL_PREFERENCES = [
-    'claude-sonnet-4-6',
-    'claude-sonnet-4-5-20250929',
-    'claude-sonnet-4-5',
-    'claude-sonnet-4-20250514',
-    'claude-3-7-sonnet-20250219'
-];
+    if (isPlainObject(value)) {
+        return Object.entries(value).reduce((result, [key, nestedValue]) => {
+            result[key] = cloneRuleValue(nestedValue);
+            return result;
+        }, {});
+    }
+
+    return value;
+}
+
+function mergeRoutingRules(baseRules, overrideRules) {
+    if (!isPlainObject(overrideRules)) {
+        return cloneRuleValue(baseRules);
+    }
+
+    const mergedRules = cloneRuleValue(baseRules);
+    Object.entries(overrideRules).forEach(([key, value]) => {
+        if (Array.isArray(value)) {
+            mergedRules[key] = cloneRuleValue(value);
+            return;
+        }
+
+        if (isPlainObject(value) && isPlainObject(mergedRules[key])) {
+            mergedRules[key] = mergeRoutingRules(mergedRules[key], value);
+            return;
+        }
+
+        mergedRules[key] = cloneRuleValue(value);
+    });
+
+    return mergedRules;
+}
 
 function normalizeAliasLookupKey(model) {
     if (typeof model !== 'string') {
@@ -272,9 +351,117 @@ function createAliasLookup(aliasMap) {
     }, {});
 }
 
-const CLAUDE_PROTOCOL_MODEL_ALIAS_LOOKUP = createAliasLookup(CLAUDE_PROTOCOL_MODEL_ALIASES);
-const CLAUDE_PROVIDER_MODEL_ALIAS_LOOKUP = createAliasLookup(CLAUDE_PROVIDER_MODEL_ALIASES);
-const CODEX_PROTOCOL_MODEL_ALIAS_LOOKUP = createAliasLookup(CODEX_PROTOCOL_MODEL_ALIASES);
+function createAntigravityAliasLookup(aliasMap) {
+    return Object.values(aliasMap || {}).reduce((lookup, aliasConfig) => {
+        const equivalents = Array.isArray(aliasConfig?.equivalents) ? aliasConfig.equivalents : [];
+        equivalents.forEach(modelId => {
+            if (typeof modelId === 'string' && modelId.trim()) {
+                lookup[modelId.trim()] = aliasConfig;
+            }
+        });
+        return lookup;
+    }, {});
+}
+
+function pickString(value, fallbackValue) {
+    return typeof value === 'string' && value.trim() ? value.trim() : fallbackValue;
+}
+
+function pickStringArray(value, fallbackValue = []) {
+    const normalizedValue = Array.isArray(value)
+        ? value.filter(item => typeof item === 'string').map(item => item.trim()).filter(Boolean)
+        : [];
+    return normalizedValue.length > 0 ? normalizedValue : [...fallbackValue];
+}
+
+export function getEffectiveClientModelRoutingRules(overrideRules = {}) {
+    return mergeRoutingRules(DEFAULT_CLIENT_MODEL_ROUTING_RULES, overrideRules);
+}
+
+function createRoutingState(overrideRules = {}) {
+    const rules = getEffectiveClientModelRoutingRules(overrideRules);
+    const providerTargets = rules.providerTargets || {};
+    const antigravityAliases = isPlainObject(rules.antigravityAliases) ? rules.antigravityAliases : {};
+    const codexToClaude = providerTargets.codexToClaude || {};
+    const antigravityTargets = providerTargets.antigravity || {};
+    const kiroTargets = providerTargets.kiro || {};
+
+    return {
+        rules,
+        claudeProtocolModelAliasLookup: createAliasLookup(rules.protocolModelAliases?.claude || {}),
+        claudeProviderModelAliasLookup: createAliasLookup(rules.providerModelAliases?.claude || {}),
+        codexProtocolModelAliasLookup: createAliasLookup(rules.protocolModelAliases?.openai || {}),
+        antigravityModelAliases: antigravityAliases,
+        antigravityModelAliasLookup: createAntigravityAliasLookup(antigravityAliases),
+        openaiUpstreamDefaultModel: pickString(
+            providerTargets.openaiCompatible?.defaultModel,
+            DEFAULT_CLIENT_MODEL_ROUTING_RULES.providerTargets.openaiCompatible.defaultModel
+        ),
+        geminiUpstreamDefaultModel: pickString(
+            providerTargets.geminiCli?.defaultModel,
+            DEFAULT_CLIENT_MODEL_ROUTING_RULES.providerTargets.geminiCli.defaultModel
+        ),
+        kiroUpstreamDefaultModel: pickString(
+            kiroTargets.defaultModel,
+            DEFAULT_CLIENT_MODEL_ROUTING_RULES.providerTargets.kiro.defaultModel
+        ),
+        kiroHaikuModel: pickString(
+            kiroTargets.haikuModel,
+            DEFAULT_CLIENT_MODEL_ROUTING_RULES.providerTargets.kiro.haikuModel
+        ),
+        grokUpstreamDefaultModel: pickString(
+            providerTargets.grokCompatible?.defaultModel,
+            DEFAULT_CLIENT_MODEL_ROUTING_RULES.providerTargets.grokCompatible.defaultModel
+        ),
+        antigravitySonnetModel: pickString(
+            antigravityTargets.sonnetModel,
+            DEFAULT_CLIENT_MODEL_ROUTING_RULES.providerTargets.antigravity.sonnetModel
+        ),
+        antigravityOpusModel: pickString(
+            antigravityTargets.opusModel,
+            DEFAULT_CLIENT_MODEL_ROUTING_RULES.providerTargets.antigravity.opusModel
+        ),
+        codexHighCapabilityModel: pickString(
+            codexToClaude.highCapabilityModel,
+            DEFAULT_CLIENT_MODEL_ROUTING_RULES.providerTargets.codexToClaude.highCapabilityModel
+        ),
+        supportedCodexClientModels: new Set(
+            pickStringArray(
+                codexToClaude.supportedClientModels,
+                DEFAULT_CLIENT_MODEL_ROUTING_RULES.providerTargets.codexToClaude.supportedClientModels
+            )
+        ),
+        claudeHighCapabilityPreferredModels: pickStringArray(
+            codexToClaude.highCapabilityPreferredModels,
+            DEFAULT_CLIENT_MODEL_ROUTING_RULES.providerTargets.codexToClaude.highCapabilityPreferredModels
+        ),
+        claudeStandardPreferredModels: pickStringArray(
+            codexToClaude.standardPreferredModels,
+            DEFAULT_CLIENT_MODEL_ROUTING_RULES.providerTargets.codexToClaude.standardPreferredModels
+        )
+    };
+}
+
+let currentClientModelRoutingRules = getEffectiveClientModelRoutingRules();
+let routingState = createRoutingState(currentClientModelRoutingRules);
+
+export function getClientModelRoutingRules() {
+    return cloneRuleValue(currentClientModelRoutingRules);
+}
+
+export function getDefaultClientModelRoutingRules() {
+    return cloneRuleValue(DEFAULT_CLIENT_MODEL_ROUTING_RULES);
+}
+
+export function setClientModelRoutingRules(overrideRules = {}) {
+    currentClientModelRoutingRules = getEffectiveClientModelRoutingRules(overrideRules);
+    routingState = createRoutingState(currentClientModelRoutingRules);
+    return getClientModelRoutingRules();
+}
+
+export function resetClientModelRoutingRules() {
+    return setClientModelRoutingRules({});
+}
 
 function normalizeClaudeProtocolModel(model) {
     const normalizedModel = typeof model === 'string' ? model.trim() : model;
@@ -282,7 +469,7 @@ function normalizeClaudeProtocolModel(model) {
         return normalizedModel;
     }
 
-    return CLAUDE_PROTOCOL_MODEL_ALIAS_LOOKUP[normalizeAliasLookupKey(normalizedModel)] || normalizedModel;
+    return routingState.claudeProtocolModelAliasLookup[normalizeAliasLookupKey(normalizedModel)] || normalizedModel;
 }
 
 function normalizeClaudeProviderModel(model) {
@@ -291,7 +478,7 @@ function normalizeClaudeProviderModel(model) {
         return normalizedModel;
     }
 
-    return CLAUDE_PROVIDER_MODEL_ALIAS_LOOKUP[normalizeAliasLookupKey(normalizedModel)] || normalizedModel;
+    return routingState.claudeProviderModelAliasLookup[normalizeAliasLookupKey(normalizedModel)] || normalizedModel;
 }
 
 function normalizeCodexProtocolModel(model) {
@@ -300,12 +487,12 @@ function normalizeCodexProtocolModel(model) {
         return normalizedModel;
     }
 
-    return CODEX_PROTOCOL_MODEL_ALIAS_LOOKUP[normalizeAliasLookupKey(normalizedModel)] || normalizedModel;
+    return routingState.codexProtocolModelAliasLookup[normalizeAliasLookupKey(normalizedModel)] || normalizedModel;
 }
 
 function getSupportedCodexClientModel(model) {
     const canonicalModel = normalizeCodexProtocolModel(model);
-    return SUPPORTED_CODEX_CLIENT_MODELS.has(canonicalModel) ? canonicalModel : null;
+    return routingState.supportedCodexClientModels.has(canonicalModel) ? canonicalModel : null;
 }
 
 function isClaudeFamilyModel(model) {
@@ -341,18 +528,18 @@ function resolveClaudeTargetForCodex(model, supportedModels = []) {
         return null;
     }
 
-    if (canonicalCodexModel === CODEX_HIGH_CAPABILITY_MODEL) {
+    if (canonicalCodexModel === routingState.codexHighCapabilityModel) {
         return selectPreferredModel(
             supportedModels,
-            [...CLAUDE_OPUS_MODEL_PREFERENCES, ...CLAUDE_SONNET_MODEL_PREFERENCES],
-            CLAUDE_OPUS_MODEL_PREFERENCES[0]
+            routingState.claudeHighCapabilityPreferredModels,
+            routingState.claudeHighCapabilityPreferredModels[0]
         );
     }
 
     return selectPreferredModel(
         supportedModels,
-        CLAUDE_SONNET_MODEL_PREFERENCES,
-        CLAUDE_SONNET_MODEL_PREFERENCES[0]
+        routingState.claudeStandardPreferredModels,
+        routingState.claudeStandardPreferredModels[0]
     );
 }
 
@@ -378,26 +565,6 @@ export function normalizeRequestedModelForProtocol(protocol, model) {
             return normalizedModel;
     }
 }
-
-const ANTIGRAVITY_MODEL_ALIASES = {
-    'claude-sonnet-4-6': {
-        internal: 'gemini-claude-sonnet-4-6',
-        public: 'claude-sonnet-4-6',
-        equivalents: ['claude-sonnet-4-6', 'gemini-claude-sonnet-4-6']
-    },
-    'claude-opus-4-6': {
-        internal: 'gemini-claude-opus-4-6-thinking',
-        public: 'claude-opus-4-6',
-        equivalents: ['claude-opus-4-6', 'claude-opus-4-6-thinking', 'gemini-claude-opus-4-6-thinking']
-    }
-};
-
-const ANTIGRAVITY_MODEL_ALIAS_LOOKUP = Object.values(ANTIGRAVITY_MODEL_ALIASES).reduce((lookup, aliasConfig) => {
-    aliasConfig.equivalents.forEach(modelId => {
-        lookup[modelId] = aliasConfig;
-    });
-    return lookup;
-}, {});
 
 function isAntigravityProviderType(providerType) {
     return providerType === MODEL_PROVIDER.ANTIGRAVITY ||
@@ -476,9 +643,9 @@ export function getEquivalentProviderModelIds(providerType, model, supportedMode
         const providerModel = normalizeRequestedModelForProvider(providerType, normalizedModel, supportedModels);
         acceptableModelIds.add(providerModel);
         const aliasConfig =
-            ANTIGRAVITY_MODEL_ALIAS_LOOKUP[providerModel] ||
-            ANTIGRAVITY_MODEL_ALIAS_LOOKUP[canonicalModel] ||
-            ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel];
+            routingState.antigravityModelAliasLookup[providerModel] ||
+            routingState.antigravityModelAliasLookup[canonicalModel] ||
+            routingState.antigravityModelAliasLookup[normalizedModel];
         if (aliasConfig) {
             aliasConfig.equivalents.forEach(modelId => acceptableModelIds.add(modelId));
         }
@@ -558,31 +725,31 @@ export function normalizeRequestedModelForProvider(providerType, model, supporte
     if (isAntigravityProviderType(providerType)) {
         const codexClaudeTarget = resolveClaudeTargetForCodex(normalizedModel);
         if (codexClaudeTarget) {
-            return ANTIGRAVITY_MODEL_ALIAS_LOOKUP[codexClaudeTarget]?.internal || codexClaudeTarget;
+            return routingState.antigravityModelAliasLookup[codexClaudeTarget]?.internal || codexClaudeTarget;
         }
 
         const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
         if (isClaudeOpusModel(canonicalModel)) {
-            return ANTIGRAVITY_MODEL_ALIAS_LOOKUP['claude-opus-4-6']?.internal || canonicalModel;
+            return routingState.antigravityModelAliasLookup[routingState.antigravityOpusModel]?.internal || canonicalModel;
         }
         if (isClaudeFamilyModel(canonicalModel)) {
-            return ANTIGRAVITY_MODEL_ALIAS_LOOKUP['claude-sonnet-4-6']?.internal || canonicalModel;
+            return routingState.antigravityModelAliasLookup[routingState.antigravitySonnetModel]?.internal || canonicalModel;
         }
 
-        return ANTIGRAVITY_MODEL_ALIAS_LOOKUP[canonicalModel]?.internal ||
-            ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel]?.internal ||
+        return routingState.antigravityModelAliasLookup[canonicalModel]?.internal ||
+            routingState.antigravityModelAliasLookup[normalizedModel]?.internal ||
             normalizedModel;
     }
 
     if (isGeminiCliProviderType(providerType)) {
         const canonicalCodexModel = getSupportedCodexClientModel(normalizedModel);
         if (canonicalCodexModel) {
-            return GEMINI_UPSTREAM_DEFAULT_MODEL;
+            return routingState.geminiUpstreamDefaultModel;
         }
 
         const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
         if (isClaudeFamilyModel(canonicalModel)) {
-            return GEMINI_UPSTREAM_DEFAULT_MODEL;
+            return routingState.geminiUpstreamDefaultModel;
         }
         return normalizedModel;
     }
@@ -590,15 +757,15 @@ export function normalizeRequestedModelForProvider(providerType, model, supporte
     if (isKiroProviderType(providerType)) {
         const canonicalCodexModel = getSupportedCodexClientModel(normalizedModel);
         if (canonicalCodexModel) {
-            return KIRO_UPSTREAM_DEFAULT_MODEL;
+            return routingState.kiroUpstreamDefaultModel;
         }
 
         const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
         if (isClaudeHaikuModel(canonicalModel)) {
-            return 'claude-haiku-4-5';
+            return routingState.kiroHaikuModel;
         }
         if (isClaudeFamilyModel(canonicalModel)) {
-            return KIRO_UPSTREAM_DEFAULT_MODEL;
+            return routingState.kiroUpstreamDefaultModel;
         }
         return normalizedModel;
     }
@@ -606,7 +773,7 @@ export function normalizeRequestedModelForProvider(providerType, model, supporte
     if (isCodexProviderType(providerType)) {
         const canonicalClaudeModel = normalizeClaudeProviderModel(normalizedModel);
         if (isClaudeFamilyModel(canonicalClaudeModel)) {
-            return OPENAI_UPSTREAM_DEFAULT_MODEL;
+            return routingState.openaiUpstreamDefaultModel;
         }
         return normalizeCodexProtocolModel(normalizedModel);
     }
@@ -614,7 +781,7 @@ export function normalizeRequestedModelForProvider(providerType, model, supporte
     if (isOpenAICustomProviderType(providerType) || isOpenAIResponsesProviderType(providerType)) {
         const canonicalClaudeModel = normalizeClaudeProviderModel(normalizedModel);
         if (isClaudeFamilyModel(canonicalClaudeModel)) {
-            return OPENAI_UPSTREAM_DEFAULT_MODEL;
+            return routingState.openaiUpstreamDefaultModel;
         }
         return normalizeCodexProtocolModel(normalizedModel);
     }
@@ -644,12 +811,12 @@ export function normalizeRequestedModelForProvider(providerType, model, supporte
 
         const canonicalCodexModel = getSupportedCodexClientModel(normalizedModel);
         if (canonicalCodexModel) {
-            return GROK_UPSTREAM_DEFAULT_MODEL;
+            return routingState.grokUpstreamDefaultModel;
         }
 
         const canonicalClaudeModel = normalizeClaudeProviderModel(normalizedModel);
         if (isClaudeFamilyModel(canonicalClaudeModel)) {
-            return GROK_UPSTREAM_DEFAULT_MODEL;
+            return routingState.grokUpstreamDefaultModel;
         }
 
         return normalizedModel;
@@ -670,8 +837,8 @@ export function toPublicProviderModelId(providerType, model) {
 
     if (isAntigravityProviderType(providerType)) {
         const canonicalModel = normalizeClaudeProviderModel(normalizedModel);
-        return ANTIGRAVITY_MODEL_ALIAS_LOOKUP[canonicalModel]?.public ||
-            ANTIGRAVITY_MODEL_ALIAS_LOOKUP[normalizedModel]?.public ||
+        return routingState.antigravityModelAliasLookup[canonicalModel]?.public ||
+            routingState.antigravityModelAliasLookup[normalizedModel]?.public ||
             normalizedModel;
     }
 

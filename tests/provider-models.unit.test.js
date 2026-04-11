@@ -1,4 +1,4 @@
-import { describe, expect, test } from '@jest/globals';
+import { afterEach, describe, expect, test } from '@jest/globals';
 import {
     extractModelIdsFromNativeList,
     getConfiguredSupportedModels,
@@ -6,9 +6,15 @@ import {
     normalizeRequestedModelForProtocol,
     normalizeRequestedModelForProvider,
     providerSupportsModel,
+    resetClientModelRoutingRules,
+    setClientModelRoutingRules,
     toPublicProviderModelId,
     usesManagedModelList
 } from '../src/providers/provider-models.js';
+
+afterEach(() => {
+    resetClientModelRoutingRules();
+});
 
 describe('provider-models helpers', () => {
     test('recognizes managed model list providers', () => {
@@ -109,6 +115,30 @@ describe('provider-models helpers', () => {
             .toBe('gpt-5.4');
         expect(normalizeRequestedModelForProvider('openaiResponses-custom', 'claude-haiku-4-5'))
             .toBe('gpt-5.4');
+    });
+
+    test('applies configurable client model routing overrides', () => {
+        setClientModelRoutingRules({
+            protocolModelAliases: {
+                openai: {
+                    'gpt-5.4': ['gpt-5.4', 'gpt-5.4 (current)', 'gpt-5.4 custom']
+                }
+            },
+            providerTargets: {
+                openaiCompatible: {
+                    defaultModel: 'gpt-5.3-codex'
+                },
+                geminiCli: {
+                    defaultModel: 'gemini-2.5-flash'
+                }
+            }
+        });
+
+        expect(normalizeRequestedModelForProtocol('openai', 'gpt-5.4 custom')).toBe('gpt-5.4');
+        expect(normalizeRequestedModelForProvider('openai-custom', 'claude-sonnet-4-6'))
+            .toBe('gpt-5.3-codex');
+        expect(normalizeRequestedModelForProvider('gemini-cli-oauth', 'claude-sonnet-4-6'))
+            .toBe('gemini-2.5-flash');
     });
 
     test('exposes public Claude model ids for Antigravity aliases', () => {
