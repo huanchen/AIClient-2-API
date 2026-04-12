@@ -18,7 +18,8 @@ import {
     isPathUsed,
     pathsEqual,
     deriveProviderIdentityFromFile,
-    extractIdentityFromCredentialsData
+    extractIdentityFromCredentialsData,
+    isCustomProviderGroupPlaceholderConfig
 } from '../utils/provider-utils.js';
 import { broadcastEvent } from './event-broadcast.js';
 import { getRegisteredProviders, getServiceAdapter, serviceInstances } from '../providers/adapter.js';
@@ -622,11 +623,18 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager) 
             filteredConfig.supportedModels = normalizeModelIds(filteredConfig.supportedModels);
             filteredConfig.notSupportedModels = [];
         }
-        providerPools[providerType].push(filteredConfig);
+        const shouldCreateEmptyGroup = providerPools[providerType].length === 0
+            && isCustomProviderGroupPlaceholderConfig(providerType, filteredConfig);
+
+        if (!shouldCreateEmptyGroup) {
+            providerPools[providerType].push(filteredConfig);
+        }
 
         // Save to file
         writeFileSync(filePath, JSON.stringify(providerPools, null, 2), 'utf-8');
-        logger.info(`[UI API] Added new provider to ${providerType}: ${providerConfig.uuid}`);
+        logger.info(shouldCreateEmptyGroup
+            ? `[UI API] Created empty provider group ${providerType}`
+            : `[UI API] Added new provider to ${providerType}: ${providerConfig.uuid}`);
 
         // Update provider pool manager if available
         if (providerPoolManager) {
@@ -639,7 +647,7 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager) 
             action: 'add',
             filePath: filePath,
             providerType,
-            providerConfig: sanitizeProviderData(providerConfig),
+            providerConfig: shouldCreateEmptyGroup ? null : sanitizeProviderData(providerConfig),
             timestamp: new Date().toISOString()
         });
 
@@ -647,15 +655,16 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager) 
         broadcastEvent('provider_update', {
             action: 'add',
             providerType,
-            providerConfig: sanitizeProviderData(providerConfig),
+            providerConfig: shouldCreateEmptyGroup ? null : sanitizeProviderData(providerConfig),
             timestamp: new Date().toISOString()
         });
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             success: true,
-            message: 'Provider added successfully',
-            provider: sanitizeProviderData(providerConfig, true),
+            message: shouldCreateEmptyGroup ? 'Provider group created successfully' : 'Provider added successfully',
+            provider: shouldCreateEmptyGroup ? null : sanitizeProviderData(providerConfig, true),
+            createdEmptyGroup: shouldCreateEmptyGroup,
             providerType
         }));
         return true;

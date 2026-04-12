@@ -19,6 +19,30 @@ import { resetClientModelRoutingRules } from '../src/providers/provider-models.j
 
 const managedInstances = [];
 
+function createClaudeCustomNode(overrides = {}) {
+    return {
+        uuid: 'claude-node',
+        isHealthy: true,
+        isDisabled: false,
+        needsRefresh: false,
+        CLAUDE_API_KEY: 'test-claude-key',
+        CLAUDE_BASE_URL: 'https://example.com/v1',
+        ...overrides
+    };
+}
+
+function createOpenAiCustomNode(overrides = {}) {
+    return {
+        uuid: 'openai-node',
+        isHealthy: true,
+        isDisabled: false,
+        needsRefresh: false,
+        OPENAI_API_KEY: 'test-openai-key',
+        OPENAI_BASE_URL: 'https://example.com/v1',
+        ...overrides
+    };
+}
+
 function createManager(providerPools, globalConfig = {}) {
     const manager = new ProviderPoolManager(providerPools, {
         saveDebounceTime: 600000,
@@ -116,13 +140,10 @@ describe('provider model routing aliases', () => {
     test('Claude custom accepts Codex requests when configured supported models only expose Sonnet', async () => {
         const manager = createManager({
             'claude-custom': [
-                {
+                createClaudeCustomNode({
                     uuid: 'claude-1',
-                    isHealthy: true,
-                    isDisabled: false,
-                    needsRefresh: false,
                     supportedModels: ['claude-sonnet-4-5']
-                }
+                })
             ]
         });
 
@@ -132,16 +153,36 @@ describe('provider model routing aliases', () => {
         expect(selected.uuid).toBe('claude-1');
     });
 
-    test('OpenAI custom accepts Claude requests when only gpt-5.4 is configured', async () => {
+    test('suffixed Claude custom placeholder nodes are marked unhealthy and never selected', async () => {
         const manager = createManager({
-            'openai-custom': [
+            'claude-custom-baoshiapi': [
                 {
-                    uuid: 'openai-1',
+                    uuid: 'placeholder-1',
+                    customName: 'BAOSHIAPI',
                     isHealthy: true,
                     isDisabled: false,
                     needsRefresh: false,
-                    supportedModels: ['gpt-5.4']
+                    usageCount: 0,
+                    errorCount: 0
                 }
+            ]
+        });
+
+        const selected = await manager.selectProvider('claude-custom-baoshiapi', 'claude-opus-4-6');
+        const status = manager.providerStatus['claude-custom-baoshiapi'][0].config;
+
+        expect(selected).toBeNull();
+        expect(status.isHealthy).toBe(false);
+        expect(status.lastErrorMessage).toBe('[Config Validation] Missing required fields: CLAUDE_API_KEY, CLAUDE_BASE_URL');
+    });
+
+    test('OpenAI custom accepts Claude requests when only gpt-5.4 is configured', async () => {
+        const manager = createManager({
+            'openai-custom': [
+                createOpenAiCustomNode({
+                    uuid: 'openai-1',
+                    supportedModels: ['gpt-5.4']
+                })
             ]
         });
 

@@ -1,7 +1,10 @@
 import { describe, expect, test } from '@jest/globals';
 import {
     createProviderConfig,
-    extractIdentityFromCredentialsData
+    extractIdentityFromCredentialsData,
+    getProviderConfigValidationError,
+    getRequiredProviderConfigFields,
+    isCustomProviderGroupPlaceholderConfig
 } from '../src/utils/provider-utils.js';
 
 describe('provider-utils identity helpers', () => {
@@ -60,5 +63,25 @@ describe('provider-utils identity helpers', () => {
 
         expect(provider.customName).toBe('user@example.com');
         expect(provider.CODEX_OAUTH_CREDS_FILE_PATH).toBe('configs/codex/account.json');
+    });
+
+    test('returns required config fields for suffixed custom providers', () => {
+        expect(getRequiredProviderConfigFields('claude-custom-baoshiapi')).toEqual(['CLAUDE_API_KEY', 'CLAUDE_BASE_URL']);
+        expect(getRequiredProviderConfigFields('openaiResponses-custom-proxy')).toEqual(['OPENAI_API_KEY', 'OPENAI_BASE_URL']);
+    });
+
+    test('detects placeholder custom group configs and reports missing fields', () => {
+        const placeholderConfig = {
+            customName: 'BAOSHIAPI',
+            isHealthy: true,
+            isDisabled: false,
+            usageCount: 0,
+            errorCount: 0
+        };
+
+        expect(isCustomProviderGroupPlaceholderConfig('claude-custom-baoshiapi', placeholderConfig)).toBe(true);
+        expect(getProviderConfigValidationError('claude-custom-baoshiapi', placeholderConfig)).toBe(
+            '[Config Validation] Missing required fields: CLAUDE_API_KEY, CLAUDE_BASE_URL'
+        );
     });
 });

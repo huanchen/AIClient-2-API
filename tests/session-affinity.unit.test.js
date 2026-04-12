@@ -9,9 +9,21 @@ import { ProviderPoolManager } from '../src/providers/provider-pool-manager.js';
 const providerType = 'openai-custom';
 const managedInstances = [];
 
+function createOpenAiCustomNode(overrides = {}) {
+    return {
+        uuid: 'node',
+        isHealthy: true,
+        isDisabled: false,
+        needsRefresh: false,
+        OPENAI_API_KEY: 'test-openai-key',
+        OPENAI_BASE_URL: 'https://example.com/v1',
+        ...overrides
+    };
+}
+
 function createManager(providerConfigs = [
-    { uuid: 'node-a', isHealthy: true, isDisabled: false, needsRefresh: false },
-    { uuid: 'node-b', isHealthy: true, isDisabled: false, needsRefresh: false }
+    createOpenAiCustomNode({ uuid: 'node-a' }),
+    createOpenAiCustomNode({ uuid: 'node-b' })
 ]) {
     const manager = new ProviderPoolManager({
         [providerType]: providerConfigs
@@ -112,16 +124,14 @@ describe('session affinity fixes', () => {
 
     test('cold start clears persisted unhealthy nodes that have no recovery deadline', () => {
         const manager = createManager([
-            {
+            createOpenAiCustomNode({
                 uuid: 'node-a',
                 isHealthy: false,
-                isDisabled: false,
-                needsRefresh: false,
                 errorCount: 11,
                 lastErrorTime: '2026-04-11T15:57:06.119Z',
                 lastErrorMessage: 'Request failed with status code 403'
-            },
-            { uuid: 'node-b', isHealthy: true, isDisabled: false, needsRefresh: false }
+            }),
+            createOpenAiCustomNode({ uuid: 'node-b' })
         ]);
 
         const provider = manager.providerStatus[providerType].find(p => p.config.uuid === 'node-a').config;

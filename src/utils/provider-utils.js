@@ -92,6 +92,57 @@ export const PROVIDER_MAPPINGS = [
     }
 ];
 
+const CUSTOM_PROVIDER_CONFIG_RULES = [
+    {
+        prefix: 'claude-custom',
+        requiredFields: ['CLAUDE_API_KEY', 'CLAUDE_BASE_URL']
+    },
+    {
+        prefix: 'openai-custom',
+        requiredFields: ['OPENAI_API_KEY', 'OPENAI_BASE_URL']
+    },
+    {
+        prefix: 'openaiResponses-custom',
+        requiredFields: ['OPENAI_API_KEY', 'OPENAI_BASE_URL']
+    }
+];
+
+const CUSTOM_PROVIDER_GROUP_PLACEHOLDER_FIELDS = new Set([
+    'uuid',
+    'customName',
+    'isHealthy',
+    'isDisabled',
+    'lastUsed',
+    'usageCount',
+    'errorCount',
+    'lastErrorTime',
+    'lastHealthCheckTime',
+    'lastHealthCheckModel',
+    'lastErrorMessage',
+    'lastCoolDownDuration',
+    'scheduledRecoveryTime',
+    'needsRefresh',
+    'refreshCount',
+    'checkHealth',
+    'checkModelName',
+    'supportedModels',
+    'notSupportedModels'
+]);
+
+function getCustomProviderConfigRule(providerType = '') {
+    return CUSTOM_PROVIDER_CONFIG_RULES.find(rule =>
+        providerType === rule.prefix || providerType.startsWith(`${rule.prefix}-`)
+    ) || null;
+}
+
+function isMissingRequiredConfigValue(value) {
+    if (typeof value === 'string') {
+        return value.trim() === '';
+    }
+
+    return value === undefined || value === null;
+}
+
 /**
  * 生成 UUID
  * 兼容旧版 Node.js（<14.17.0）：如果 crypto.randomUUID 不存在则使用 Math.random 回退方案
@@ -362,6 +413,46 @@ export function createProviderConfig(options) {
     }
     
     return newProvider;
+}
+
+export function getRequiredProviderConfigFields(providerType) {
+    return getCustomProviderConfigRule(providerType)?.requiredFields || [];
+}
+
+export function getProviderConfigValidationError(providerType, providerConfig = {}) {
+    const requiredFields = getRequiredProviderConfigFields(providerType);
+    if (requiredFields.length === 0) {
+        return null;
+    }
+
+    const missingFields = requiredFields.filter(field => isMissingRequiredConfigValue(providerConfig?.[field]));
+    if (missingFields.length === 0) {
+        return null;
+    }
+
+    return `[Config Validation] Missing required fields: ${missingFields.join(', ')}`;
+}
+
+export function isProviderConfigValidationErrorMessage(message) {
+    return typeof message === 'string' && message.startsWith('[Config Validation] Missing required fields: ');
+}
+
+export function isCustomProviderGroupPlaceholderConfig(providerType, providerConfig = {}) {
+    const requiredFields = getRequiredProviderConfigFields(providerType);
+    if (requiredFields.length === 0) {
+        return false;
+    }
+
+    if (!isMissingRequiredConfigValue(providerConfig?.[requiredFields[0]])) {
+        return false;
+    }
+
+    const keys = Object.keys(providerConfig || {});
+    if (keys.length === 0) {
+        return false;
+    }
+
+    return keys.every(key => CUSTOM_PROVIDER_GROUP_PLACEHOLDER_FIELDS.has(key));
 }
 
 export function extractIdentityFromCredentialsData(credentials = {}, filePath = '') {

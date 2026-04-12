@@ -14,6 +14,10 @@ import {
 } from './provider-models.js';
 import { broadcastEvent } from '../ui-modules/event-broadcast.js';
 import { ENDPOINT_TYPE } from '../utils/common.js';
+import {
+    getProviderConfigValidationError,
+    isProviderConfigValidationErrorMessage
+} from '../utils/provider-utils.js';
 
 /**
  * Manages a pool of API service providers, handling their health and selection.
@@ -762,6 +766,28 @@ export class ProviderPoolManager {
                         ? 0
                         : (providerConfig.lastCoolDownDuration || 0);
                     providerConfig.customName = providerConfig.customName || null;
+
+                    const configValidationError = getProviderConfigValidationError(providerType, providerConfig);
+                    if (configValidationError) {
+                        const validationChanged = providerConfig.lastErrorMessage !== configValidationError
+                            || providerConfig.isHealthy !== false;
+                        providerConfig.isHealthy = false;
+                        providerConfig.lastErrorMessage = configValidationError;
+                        providerConfig.lastErrorTime = validationChanged
+                            ? new Date().toISOString()
+                            : (providerConfig.lastErrorTime || new Date().toISOString());
+
+                        if (validationChanged) {
+                            this._log('warn', `Config validation failed for ${providerType}/${providerConfig.uuid}: ${configValidationError}`);
+                        }
+                    } else if (isProviderConfigValidationErrorMessage(providerConfig.lastErrorMessage)) {
+                        providerConfig.lastErrorMessage = null;
+                        providerConfig.lastErrorTime = null;
+                        providerConfig.lastCoolDownDuration = 0;
+                        if (!providerConfig.isDisabled && !providerConfig.scheduledRecoveryTime) {
+                            providerConfig.isHealthy = true;
+                        }
+                    }
 
                     this.providerStatus[providerType].push({
                         config: providerConfig,
