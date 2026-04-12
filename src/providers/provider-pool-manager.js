@@ -1078,6 +1078,31 @@ export class ProviderPoolManager {
      * @returns {{sessionKey: string|null, source: string, rawValue: string|null, aliasResolved: boolean}}
      */
     extractSessionAffinityContext(requestBody, providerType, model, options = {}) {
+        const buildWeakSessionContext = (seedValue, source) => {
+            if (seedValue === undefined || seedValue === null) {
+                return null;
+            }
+
+            const normalizedSeed = String(seedValue).trim();
+            if (!normalizedSeed) {
+                return null;
+            }
+
+            const composite = `${normalizedSeed}:${providerType}`;
+            let hash = 0;
+            for (let i = 0; i < composite.length; i++) {
+                hash = ((hash << 5) - hash) + composite.charCodeAt(i);
+                hash |= 0;
+            }
+
+            return {
+                sessionKey: `p2:${Math.abs(hash).toString(16)}`,
+                source,
+                rawValue: normalizedSeed,
+                aliasResolved: false
+            };
+        };
+
         const p0Fields = ['conversation_id', 'conversationId', 'session_id', 'sessionId'];
         for (const field of p0Fields) {
             if (requestBody[field]) {
@@ -1136,6 +1161,22 @@ export class ProviderPoolManager {
             };
         }
 
+        const metadataWeakFields = [
+            { value: requestBody.metadata?.user_id, source: 'request.metadata.user_id' },
+            { value: requestBody.metadata?.userId, source: 'request.metadata.userId' },
+            { value: requestBody.metadata?.chat_id, source: 'request.metadata.chat_id' },
+            { value: requestBody.metadata?.chatId, source: 'request.metadata.chatId' },
+            { value: requestBody.metadata?.thread_id, source: 'request.metadata.thread_id' },
+            { value: requestBody.metadata?.threadId, source: 'request.metadata.threadId' }
+        ];
+
+        for (const candidate of metadataWeakFields) {
+            const context = buildWeakSessionContext(candidate.value, candidate.source);
+            if (context) {
+                return context;
+            }
+        }
+
         const { apiKey = '', ip = '', userAgent = '' } = options;
         if (!apiKey && !ip && !userAgent) {
             return {
@@ -1146,19 +1187,10 @@ export class ProviderPoolManager {
             };
         }
 
-        const composite = `${apiKey}:${ip}:${userAgent}:${providerType}:${model}`;
-        let hash = 0;
-        for (let i = 0; i < composite.length; i++) {
-            hash = ((hash << 5) - hash) + composite.charCodeAt(i);
-            hash |= 0;
-        }
-
-        return {
-            sessionKey: `p2:${Math.abs(hash).toString(16)}`,
-            source: 'weak(apiKey+ip+userAgent+provider+model)',
-            rawValue: null,
-            aliasResolved: false
-        };
+        return buildWeakSessionContext(
+            `${apiKey}:${ip}:${userAgent}:${providerType}:${model}`,
+            'weak(apiKey+ip+userAgent+provider+model)'
+        );
     }
 
     /**
@@ -2724,7 +2756,10 @@ export class ProviderPoolManager {
                 contents: [{
                     role: 'user',
                     parts: [{ text: baseMessage.content }]
-                }]
+                }],
+                generationConfig: {
+                    maxOutputTokens: 1
+                }
             });
             return requests;
         }
@@ -2743,7 +2778,8 @@ export class ProviderPoolManager {
         if (this._getBaseProviderType(providerType) === MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES) {
             requests.push({
                 input: [baseMessage],
-                model: modelName
+                model: modelName,
+                max_output_tokens: 1
             });
             return requests;
         }
@@ -2753,7 +2789,8 @@ export class ProviderPoolManager {
         if (this._getBaseProviderType(providerType) === MODEL_PROVIDER.CODEX_API) {
             const openAICompatibleRequest = {
                 model: modelName,
-                messages: [baseMessage]
+                messages: [baseMessage],
+                max_tokens: 1
             };
             requests.push(convertData(
                 openAICompatibleRequest,
@@ -2767,7 +2804,8 @@ export class ProviderPoolManager {
         // 其他提供商（OpenAI、Claude、Qwen）使用标准 messages 格式
         requests.push({
             messages: [baseMessage],
-            model: modelName
+            model: modelName,
+            max_tokens: 1
         });
         
         return requests;

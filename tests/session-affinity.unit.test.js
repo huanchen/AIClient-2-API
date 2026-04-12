@@ -244,6 +244,57 @@ describe('session affinity fixes', () => {
         expect(secondNode).toBe(firstNode);
     });
 
+    test('prefers metadata.user_id over transport-level weak affinity keys', () => {
+        const manager = createManager();
+
+        const session = manager.extractSessionAffinityContext({
+            metadata: {
+                user_id: 'user_123_account__session_abc'
+            }
+        }, providerType, 'gpt-5.4', {
+            apiKey: 'key-1',
+            ip: '10.0.0.8',
+            userAgent: 'claude-cli'
+        });
+
+        expect(session.source).toBe('request.metadata.user_id');
+        expect(session.aliasResolved).toBe(false);
+        expect(session.sessionKey.startsWith('p2:')).toBe(true);
+        expect(session.sessionKey).not.toBe(
+            manager.extractSessionAffinityContext({}, providerType, 'gpt-5.4', {
+                apiKey: 'key-1',
+                ip: '10.0.0.8',
+                userAgent: 'claude-cli'
+            }).sessionKey
+        );
+    });
+
+    test('builds low-token health check payloads for generic, responses, and gemini providers', () => {
+        const manager = createManager();
+
+        expect(manager._buildHealthCheckRequests('openai-custom', 'gpt-4o-mini')[0]).toEqual(
+            expect.objectContaining({
+                model: 'gpt-4o-mini',
+                max_tokens: 1
+            })
+        );
+
+        expect(manager._buildHealthCheckRequests('openaiResponses-custom', 'gpt-4o-mini')[0]).toEqual(
+            expect.objectContaining({
+                model: 'gpt-4o-mini',
+                max_output_tokens: 1
+            })
+        );
+
+        expect(manager._buildHealthCheckRequests('gemini-antigravity', 'gemini-2.5-flash')[0]).toEqual(
+            expect.objectContaining({
+                generationConfig: expect.objectContaining({
+                    maxOutputTokens: 1
+                })
+            })
+        );
+    });
+
     test('scheduled health updates do not inflate usage count', () => {
         const manager = createManager();
         const provider = manager.providerStatus[providerType].find(p => p.config.uuid === 'node-a').config;
