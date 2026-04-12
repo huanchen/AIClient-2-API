@@ -84,7 +84,19 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         SCHEDULED_HEALTH_CHECK: {
             enabled: false,
             interval: 600000,
-            startupRun: false
+            startupRun: false,
+            checkHealthyProviders: false
+        },
+        sessionAffinity: {
+            sessionAffinityEnabled: true,
+            defaultWeakTtlMs: 30 * 60 * 1000,
+            maxSessions: 10000,
+            virtualNodesPerNode: 150,
+            default5xxCoolDownMs: 60 * 1000,
+            max429CoolDownMs: 60 * 60 * 1000,
+            persistEnabled: true,
+            persistFilePath: 'configs/session_affinity_store.json',
+            persistDebounceMs: 5000
         },
         providerFallbackChain: {}, // 跨类型 Fallback 链配置
         clientModelRoutingRules: {}, // 客户端模型名到上游模型的预路由配置
@@ -112,6 +124,14 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         const configData = fs.readFileSync(configFilePath, 'utf8');
         const loadedConfig = JSON.parse(configData);
         Object.assign(currentConfig, loadedConfig);
+        currentConfig.SCHEDULED_HEALTH_CHECK = {
+            ...defaultConfig.SCHEDULED_HEALTH_CHECK,
+            ...(loadedConfig.SCHEDULED_HEALTH_CHECK || {})
+        };
+        currentConfig.sessionAffinity = {
+            ...defaultConfig.sessionAffinity,
+            ...(loadedConfig.sessionAffinity || {})
+        };
         logger.info('[Config] Loaded configuration from configs/config.json');
     } catch (error) {
         if (error.code !== 'ENOENT') {

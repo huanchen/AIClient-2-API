@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, jest, test } from '@jest/globals';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 jest.mock('../src/providers/adapter.js', () => ({
     getRegisteredProviders: jest.fn(() => []),
@@ -8,6 +11,7 @@ import { ConsistentHashRing, ProviderPoolManager } from '../src/providers/provid
 
 const providerType = 'openai-custom';
 const managedInstances = [];
+const managedTempDirs = [];
 
 function createOpenAiCustomNode(overrides = {}) {
     return {
@@ -21,21 +25,41 @@ function createOpenAiCustomNode(overrides = {}) {
     };
 }
 
-function createManager(providerConfigs = [
-    createOpenAiCustomNode({ uuid: 'node-a' }),
-    createOpenAiCustomNode({ uuid: 'node-b' })
-]) {
+function createManager(
+    providerConfigs = [
+        createOpenAiCustomNode({ uuid: 'node-a' }),
+        createOpenAiCustomNode({ uuid: 'node-b' })
+    ],
+    options = {}
+) {
+    const {
+        saveDebounceTime = 600000,
+        globalConfig = {}
+    } = options;
+
     const manager = new ProviderPoolManager({
         [providerType]: providerConfigs
     }, {
-        saveDebounceTime: 600000,
+        saveDebounceTime,
         globalConfig: {
             PROVIDER_POOLS_FILE_PATH: 'tests/.tmp-provider-pools.json',
             sessionAffinity: {
                 sessionAffinityEnabled: true,
                 virtualNodesPerNode: 16,
                 default5xxCoolDownMs: 60000,
-                max429CoolDownMs: 3600000
+                max429CoolDownMs: 3600000,
+                persistEnabled: false,
+                persistDebounceMs: 1
+            },
+            ...globalConfig,
+            sessionAffinity: {
+                sessionAffinityEnabled: true,
+                virtualNodesPerNode: 16,
+                default5xxCoolDownMs: 60000,
+                max429CoolDownMs: 3600000,
+                persistEnabled: false,
+                persistDebounceMs: 1,
+                ...(globalConfig.sessionAffinity || {})
             }
         }
     });
@@ -43,6 +67,10 @@ function createManager(providerConfigs = [
     if (manager.saveTimer) {
         clearTimeout(manager.saveTimer);
         manager.saveTimer = null;
+    }
+    if (manager.sessionAffinityPersistTimer) {
+        clearTimeout(manager.sessionAffinityPersistTimer);
+        manager.sessionAffinityPersistTimer = null;
     }
     manager.pendingSaves.clear();
     managedInstances.push(manager);
@@ -71,6 +99,12 @@ afterEach(() => {
         if (manager.saveTimer) {
             clearTimeout(manager.saveTimer);
         }
+        if (manager.sessionAffinityPersistTimer) {
+            clearTimeout(manager.sessionAffinityPersistTimer);
+        }
+    }
+    for (const dir of managedTempDirs.splice(0)) {
+        fs.rmSync(dir, { recursive: true, force: true });
     }
 });
 
@@ -305,5 +339,122 @@ describe('session affinity fixes', () => {
 
         expect(provider.usageCount).toBe(7);
         expect(provider.lastUsed).toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    test('scheduled health checks only probe abnormal nodes by default', async () => {
+        const manager = createManager([
+            createOpenAiCustomNode({ uuid: 'node-a', isHealthy: true }),
+            createOpenAiCustomNode({ uuid: 'node-b', isHealthy: true })
+        ], {
+            globalConfig: {
+                SCHEDULED_HEALTH_CHECK: {
+                    enabled: true,
+                    interval: 600000,
+                    providerTypes: [providerType],
+                    checkHealthyProviders: false
+                }
+            }
+        });
+        manager._checkProviderHealth = jest.fn().mockResolvedValue({
+            success: true,
+            modelName: 'gpt-4o-mini'
+        });
+        const abnormalProvider = manager.providerStatus[providerType].find((provider) => provider.config.uuid === 'node-b').config;
+        abnormalProvider.isHealthy = false;
+        abnormalProvider.errorCount = 11;
+        abnormalProvider.lastErrorTime = '2024-01-01T00:00:00.000Z';
+
+        await manager.performHealthChecks();
+
+        expect(manager._checkProviderHealth).toHaveBeenCalledTimes(1);
+        expect(manager._checkProviderHealth.mock.calls[0][1].uuid).toBe('node-b');
+    });
+
+    test('startup health checks can include healthy nodes when explicitly enabled', async () => {
+        const manager = createManager([
+            createOpenAiCustomNode({ uuid: 'node-a', isHealthy: true }),
+            createOpenAiCustomNode({ uuid: 'node-b', isHealthy: true })
+        ], {
+            globalConfig: {
+                SCHEDULED_HEALTH_CHECK: {
+                    enabled: true,
+                    startupRun: true,
+                    interval: 600000,
+                    providerTypes: [providerType],
+                    checkHealthyProviders: true
+                }
+            }
+        });
+        manager._checkProviderHealth = jest.fn().mockResolvedValue({
+            success: true,
+            modelName: 'gpt-4o-mini'
+        });
+
+        await manager.performInitialHealthChecks();
+
+        expect(manager._checkProviderHealth).toHaveBeenCalledTimes(2);
+        expect(manager._checkProviderHealth.mock.calls.map(([, config]) => config.uuid)).toEqual(['node-a', 'node-b']);
+    });
+
+    test('restores persisted session affinity bindings and response aliases after restart', async () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai2api-session-affinity-'));
+        const persistFilePath = path.join(tempDir, 'session-affinity-store.json');
+        managedTempDirs.push(tempDir);
+
+        const managerA = createManager(undefined, {
+            globalConfig: {
+                sessionAffinity: {
+                    persistEnabled: true,
+                    persistFilePath,
+                    persistDebounceMs: 1
+                }
+            }
+        });
+        const now = 1_700_000_000_000;
+        jest.useFakeTimers();
+        jest.setSystemTime(now);
+
+        seedSession(managerA, 'p0:persisted-session', {
+            cooling: new Map([['node-b', now + 60000]])
+        });
+        managerA.bindResponseIdToSession('resp_turn_1', 'p0:persisted-session');
+        await managerA._flushSessionAffinityPersistence();
+
+        const managerB = createManager(undefined, {
+            globalConfig: {
+                sessionAffinity: {
+                    persistEnabled: true,
+                    persistFilePath,
+                    persistDebounceMs: 1
+                }
+            }
+        });
+
+        const restoredSession = managerB.sessionAffinity.get('p0:persisted-session');
+
+        expect(restoredSession).toEqual(expect.objectContaining({
+            boundUuid: 'node-a',
+            providerType
+        }));
+        expect(restoredSession.cooling).toBeInstanceOf(Map);
+        expect(restoredSession.cooling.get('node-b')).toBe(now + 60000);
+        expect(managerB.resolveSessionAlias('resp_turn_1')).toBe('p0:persisted-session');
+    });
+
+    test('acquireSlot prefers a different upstream endpoint when a shared endpoint is already busy', async () => {
+        const manager = createManager([
+            createOpenAiCustomNode({ uuid: 'node-a', OPENAI_BASE_URL: 'https://same.example.com/v1' }),
+            createOpenAiCustomNode({ uuid: 'node-b', OPENAI_BASE_URL: 'https://same.example.com/v1' }),
+            createOpenAiCustomNode({ uuid: 'node-c', OPENAI_BASE_URL: 'https://other.example.com/v1' })
+        ]);
+
+        const first = await manager.acquireSlot(providerType);
+        const second = await manager.acquireSlot(providerType);
+
+        expect(first.uuid).toBe('node-a');
+        expect(second.uuid).toBe('node-c');
+
+        manager.releaseSlot(providerType, first.uuid);
+        manager.releaseSlot(providerType, second.uuid);
     });
 });

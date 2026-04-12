@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as crypto from 'crypto';
+import * as path from 'path';
 import { getServiceAdapter, getRegisteredProviders } from './adapter.js';
 import logger from '../utils/logger.js';
 import { MODEL_PROVIDER, getProtocolPrefix } from '../utils/common.js';
@@ -62,6 +63,9 @@ export class ProviderPoolManager {
         virtualNodesPerNode: 150,
         default5xxCoolDownMs: 60 * 1000, // 1分钟
         max429CoolDownMs: 60 * 60 * 1000, // 1小时
+        persistEnabled: true,
+        persistFilePath: 'configs/session_affinity_store.json',
+        persistDebounceMs: 5000,
     };
 
     constructor(providerPools, options = {}) {
@@ -123,13 +127,20 @@ export class ProviderPoolManager {
             ...ProviderPoolManager.DEFAULT_SESSION_AFFINITY_CONFIG,
             ...(options.globalConfig?.sessionAffinity || {})
         };
-        this.sessionAffinity = new SessionAffinityMap(this.sessionAffinityConfig);
+        this.sessionAffinity = new SessionAffinityMap({
+            ...this.sessionAffinityConfig,
+            onDirty: () => this._scheduleSessionAffinityPersist()
+        });
         this.consistentHashRings = new Map();
         this.sessionResponseAliases = new Map();
         this.maxSessionResponseAliases = Math.max(this.sessionAffinityConfig.maxSessions * 4, 1000);
+        this.endpointConcurrencyState = new Map();
+        this.sessionAffinityPersistTimer = null;
+        this.sessionAffinityPersistDirty = false;
         this._setupPeriodicCleanup();
 
         this.initializeProviderStatus();
+        this._loadPersistedSessionAffinityStore();
     }
 
     /**
@@ -574,10 +585,16 @@ export class ProviderPoolManager {
         // 惩罚项 C: 负载 (每个活跃请求增加 5 秒权重)
         const loadScore = (state.activeCount || 0) * 5000;
 
+        // 惩罚项 D: 共享上游 endpoint 的整体负载，避免同网关 sibling 节点被同时打满
+        const endpointState = this._getEndpointConcurrencyState(providerStatus.type, config);
+        const endpointLoadScore = endpointState
+            ? ((endpointState.activeCount || 0) * 5e13) + ((endpointState.waitingCount || 0) * 1e14)
+            : 0;
+
         // 新鲜节点的微调：配合 usageScore 和 sequenceScore 在多个新鲜节点间轮询
         const freshBonus = isFresh ? (now - lastHealthCheckTime) : 0;
 
-        return baseScore + usageScore + sequenceScore + loadScore + freshBonus;
+        return baseScore + usageScore + sequenceScore + loadScore + endpointLoadScore + freshBonus;
     }
 
     /**
@@ -784,6 +801,104 @@ export class ProviderPoolManager {
         return null;
     }
 
+    _getEndpointStateKey(providerType, providerConfig) {
+        const endpointIdentity = this._getProviderEndpointIdentity(providerConfig);
+        if (!providerType || !endpointIdentity) {
+            return null;
+        }
+        return `${providerType}::${endpointIdentity}`;
+    }
+
+    _getEndpointConcurrencyState(providerType, providerConfig) {
+        const key = this._getEndpointStateKey(providerType, providerConfig);
+        if (!key) {
+            return null;
+        }
+        return this.endpointConcurrencyState.get(key) || null;
+    }
+
+    _rebuildEndpointConcurrencyState(providerType = null) {
+        const typesToRebuild = providerType ? [providerType] : Object.keys(this.providerStatus);
+
+        for (const type of typesToRebuild) {
+            for (const existingKey of Array.from(this.endpointConcurrencyState.keys())) {
+                if (existingKey.startsWith(`${type}::`)) {
+                    this.endpointConcurrencyState.delete(existingKey);
+                }
+            }
+
+            const providers = this.providerStatus[type] || [];
+            for (const provider of providers) {
+                const endpointIdentity = this._getProviderEndpointIdentity(provider.config);
+                if (!endpointIdentity) {
+                    continue;
+                }
+
+                const key = `${type}::${endpointIdentity}`;
+                let state = this.endpointConcurrencyState.get(key);
+                if (!state) {
+                    state = {
+                        providerType: type,
+                        endpointIdentity,
+                        nodeUuids: new Set(),
+                        activeCount: 0,
+                        waitingCount: 0
+                    };
+                    this.endpointConcurrencyState.set(key, state);
+                }
+
+                state.nodeUuids.add(provider.config.uuid);
+                state.activeCount += provider.state?.activeCount || 0;
+                state.waitingCount += provider.state?.waitingCount || 0;
+            }
+        }
+    }
+
+    _updateEndpointConcurrencyCounter(providerType, providerConfig, activeDelta = 0, waitingDelta = 0) {
+        const state = this._getEndpointConcurrencyState(providerType, providerConfig);
+        if (!state) {
+            return;
+        }
+
+        state.activeCount = Math.max(0, state.activeCount + activeDelta);
+        state.waitingCount = Math.max(0, state.waitingCount + waitingDelta);
+    }
+
+    _hasIdleAlternativeEndpoint(providerType, candidateUuid, healthyNodes) {
+        const candidateProvider = healthyNodes.find((provider) => provider.config.uuid === candidateUuid);
+        if (!candidateProvider) {
+            return false;
+        }
+
+        const candidateIdentity = this._getProviderEndpointIdentity(candidateProvider.config);
+        for (const provider of healthyNodes) {
+            if (provider.config.uuid === candidateUuid) {
+                continue;
+            }
+
+            const endpointIdentity = this._getProviderEndpointIdentity(provider.config);
+            if (endpointIdentity && endpointIdentity === candidateIdentity) {
+                continue;
+            }
+
+            const endpointState = this._getEndpointConcurrencyState(providerType, provider.config);
+            if (!endpointState || endpointState.activeCount <= 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    _shouldDeprioritizeBusyEndpoint(providerType, providerConfig, healthyNodes = []) {
+        const endpointState = this._getEndpointConcurrencyState(providerType, providerConfig);
+        if (!endpointState || endpointState.activeCount <= 0) {
+            return false;
+        }
+
+        return this._hasIdleAlternativeEndpoint(providerType, providerConfig.uuid, healthyNodes);
+    }
+
     _matchesProviderSelectionFilters(providerConfig, options = {}) {
         if (!providerConfig) {
             return false;
@@ -916,9 +1031,15 @@ export class ProviderPoolManager {
             if (this.sessionAffinityConfig.sessionAffinityEnabled) {
                 this.updateConsistentHashRing(providerType);
             }
+
+            this._rebuildEndpointConcurrencyState(providerType);
             
             // 确保初始化时的默认值补全也能写盘
             this._debouncedSave(providerType);
+        }
+
+        if (this.sessionAffinityConfig.sessionAffinityEnabled && this.sessionAffinity.size > 0) {
+            this._sanitizeSessionAffinityState();
         }
         this._log('info', `Initialized provider statuses: ok (maxErrorCount: ${this.maxErrorCount})`);
     }
@@ -1010,6 +1131,9 @@ export class ProviderPoolManager {
                 removed++;
             }
         }
+        if (removed > 0) {
+            this._scheduleSessionAffinityPersist();
+        }
         return removed;
     }
 
@@ -1035,6 +1159,7 @@ export class ProviderPoolManager {
 
         if (!this.sessionAffinity.has(sessionKey)) {
             this.sessionResponseAliases.delete(normalizedResponseId);
+            this._scheduleSessionAffinityPersist();
             return null;
         }
 
@@ -1067,6 +1192,7 @@ export class ProviderPoolManager {
                 this.sessionResponseAliases.delete(oldestResponseId);
             }
         }
+        this._scheduleSessionAffinityPersist();
     }
 
     /**
@@ -1262,14 +1388,17 @@ export class ProviderPoolManager {
      */
     _pruneSessionCooling(session, now = Date.now()) {
         if (!session?.cooling || !(session.cooling instanceof Map)) {
-            return;
+            return false;
         }
 
+        let changed = false;
         for (const [uuid, deadline] of session.cooling.entries()) {
             if (Number.isFinite(deadline) && deadline <= now) {
                 session.cooling.delete(uuid);
+                changed = true;
             }
         }
+        return changed;
     }
 
     /**
@@ -1332,6 +1461,7 @@ export class ProviderPoolManager {
         session.boundUuid = null;
         session.lastAccessed = now;
         this.sessionAffinity.set(sessionKey, session);
+        this._scheduleSessionAffinityPersist();
     }
 
     /**
@@ -1345,6 +1475,7 @@ export class ProviderPoolManager {
         const removedAliases = this.cleanupExpiredSessionAliases();
         if (removed > 0 || removedAliases > 0) {
             logger.debug(`[SessionAffinity] Cleaned up ${removed} expired sessions and ${removedAliases} stale response aliases, ${this.sessionAffinity.size} sessions remaining`);
+            this._scheduleSessionAffinityPersist();
         }
     }
 
@@ -1362,7 +1493,7 @@ export class ProviderPoolManager {
         this._revalidateProviderType(providerType);
         const session = this.sessionAffinity.get(sessionKey);
         const now = Date.now();
-        this._pruneSessionCooling(session, now);
+        const coolingChanged = this._pruneSessionCooling(session, now);
         const healthyNodes = this.getHealthyNodes(providerType)
             .filter(p => this._matchesProviderSelectionFilters(p.config, options));
 
@@ -1390,6 +1521,7 @@ export class ProviderPoolManager {
             // 不健康或已冷却，移除绑定
             session.boundUuid = null;
             this.sessionAffinity.set(sessionKey, session);
+            this._scheduleSessionAffinityPersist();
         }
 
         // 一致性哈希选择
@@ -1418,7 +1550,15 @@ export class ProviderPoolManager {
                 }
             }
 
-            if (!isCooled && isHealthy) {
+            const shouldAvoidBusyEndpoint = selected
+                ? this._shouldDeprioritizeBusyEndpoint(
+                    providerType,
+                    healthyNodes.find((provider) => provider.config.uuid === selected)?.config,
+                    healthyNodes
+                )
+                : false;
+
+            if (!isCooled && isHealthy && !shouldAvoidBusyEndpoint) {
                 break;
             }
 
@@ -1444,8 +1584,13 @@ export class ProviderPoolManager {
                 cooling: existingSession.cooling instanceof Map ? existingSession.cooling : new Map()
             });
             logger.info(`[SessionAffinity] Bound ${providerType} ${this.formatSessionKeyForLog(sessionKey)} to node ${selected}`);
+            this._scheduleSessionAffinityPersist();
         } else {
             selected = null;
+            if (session && coolingChanged) {
+                this.sessionAffinity.set(sessionKey, session);
+                this._scheduleSessionAffinityPersist();
+            }
         }
 
         return selected;
@@ -1476,12 +1621,14 @@ export class ProviderPoolManager {
         // 如果没有限制，直接增加活跃计数并返回
         if (concurrencyLimit <= 0) {
             state.activeCount++;
+            this._updateEndpointConcurrencyCounter(providerType, config, 1, 0);
             return config;
         }
 
         // 检查是否在并发限制内
         if (state.activeCount < concurrencyLimit) {
             state.activeCount++;
+            this._updateEndpointConcurrencyCounter(providerType, config, 1, 0);
             return config;
         }
 
@@ -1490,6 +1637,7 @@ export class ProviderPoolManager {
             this._log('info', `[Concurrency] Node ${config.uuid} busy (${state.activeCount}/${concurrencyLimit}), enqueuing request (queue: ${state.waitingCount + 1}/${queueLimit})`);
             
             state.waitingCount++;
+            this._updateEndpointConcurrencyCounter(providerType, config, 0, 1);
             try {
                 // 等待释放信号
                 await new Promise((resolve, reject) => {
@@ -1511,10 +1659,12 @@ export class ProviderPoolManager {
                 });
             } finally {
                 state.waitingCount--;
+                this._updateEndpointConcurrencyCounter(providerType, config, 0, -1);
             }
 
             // 获得信号后，增加活跃计数
             state.activeCount++;
+            this._updateEndpointConcurrencyCounter(providerType, config, 1, 0);
             return config;
         }
 
@@ -1538,6 +1688,7 @@ export class ProviderPoolManager {
         const state = provider.state;
         if (state.activeCount > 0) {
             state.activeCount--;
+            this._updateEndpointConcurrencyCounter(providerType, provider.config, -1, 0);
         }
 
         // 如果队列中有等待的任务，释放下一个
@@ -2559,6 +2710,63 @@ export class ProviderPoolManager {
         }
     }
 
+    _shouldCheckProviderHealth(providerType, providerConfig, scheduledConfig = {}, now = Date.now()) {
+        if (!providerConfig || providerConfig.isDisabled === true) {
+            return { shouldCheck: false, reason: 'disabled' };
+        }
+
+        if (providerConfig.scheduledRecoveryTime && !providerConfig.isHealthy) {
+            const recoveryTime = new Date(providerConfig.scheduledRecoveryTime).getTime();
+            if (Number.isFinite(recoveryTime) && now < recoveryTime) {
+                return { shouldCheck: false, reason: 'scheduled-recovery-pending' };
+            }
+        }
+
+        const checkHealthyProviders = scheduledConfig?.checkHealthyProviders === true;
+        if (providerConfig.isHealthy && !checkHealthyProviders) {
+            return { shouldCheck: false, reason: 'healthy-skipped' };
+        }
+
+        if (!providerConfig.isHealthy && providerConfig.lastErrorTime) {
+            const lastErrorTime = new Date(providerConfig.lastErrorTime).getTime();
+            if (Number.isFinite(lastErrorTime) && (now - lastErrorTime) < this.healthCheckInterval) {
+                return { shouldCheck: false, reason: 'error-too-recent' };
+            }
+        }
+
+        return { shouldCheck: true, reason: 'eligible' };
+    }
+
+    _collectProvidersForHealthCheck(selectedProviderTypes, scheduledConfig = {}, options = {}) {
+        const { logPrefix = '[ScheduledHealthCheck]' } = options;
+        const providersToCheck = [];
+        const now = Date.now();
+
+        for (const providerType in this.providerStatus) {
+            if (!selectedProviderTypes.includes(providerType)) {
+                this._log('debug', `${logPrefix} Skipping provider type ${providerType}: not in selected types`);
+                continue;
+            }
+
+            for (const provider of this.providerStatus[providerType]) {
+                const decision = this._shouldCheckProviderHealth(providerType, provider.config, scheduledConfig, now);
+                if (!decision.shouldCheck) {
+                    this._log('debug', `${logPrefix} Skipping ${provider.config.uuid} (${providerType}): ${decision.reason}`);
+                    continue;
+                }
+
+                providersToCheck.push({
+                    providerType,
+                    provider,
+                    uuid: provider.config.uuid,
+                    customName: provider.config.customName
+                });
+            }
+        }
+
+        return providersToCheck;
+    }
+
     /**
      * Performs initial (startup) health checks on selected providers.
      * Respects SCHEDULED_HEALTH_CHECK.providerTypes configuration.
@@ -2579,75 +2787,46 @@ export class ProviderPoolManager {
         }
         
         this._log('info', 'Performing health checks on selected providers...');
-        const now = new Date();
         
         // 首先检查并恢复已到恢复时间的提供商
         this._checkAndRecoverScheduledProviders();
-        
-        for (const providerType in this.providerStatus) {
-            // Only check selected provider types
-            if (!selectedProviderTypes.includes(providerType)) {
-                continue;
-            }
-            
-            for (const providerStatus of this.providerStatus[providerType]) {
-                const providerConfig = providerStatus.config;
+        const providersToCheck = this._collectProvidersForHealthCheck(selectedProviderTypes, scheduledConfig, {
+            logPrefix: '[StartupHealthCheck]'
+        });
 
-                // 如果提供商有 scheduledRecoveryTime 且未到恢复时间，跳过健康检查
-                if (providerConfig.scheduledRecoveryTime && !providerConfig.isHealthy) {
-                    const recoveryTime = new Date(providerConfig.scheduledRecoveryTime);
-                    if (now < recoveryTime) {
-                        this._log('debug', `Skipping health check for ${providerConfig.uuid} (${providerType}). Waiting for scheduled recovery at ${recoveryTime.toISOString()}`);
-                        continue;
-                    }
-                }
+        for (const { providerType, provider } of providersToCheck) {
+            const providerConfig = provider.config;
 
-                // Only attempt to health check unhealthy providers after a certain interval
-                if (!providerStatus.config.isHealthy && providerStatus.config.lastErrorTime &&
-                    (now.getTime() - new Date(providerStatus.config.lastErrorTime).getTime() < this.healthCheckInterval)) {
-                    this._log('debug', `Skipping health check for ${providerConfig.uuid} (${providerType}). Last error too recent.`);
+            try {
+                const healthResult = await this._checkProviderHealth(providerType, providerConfig);
+                
+                if (healthResult === null) {
+                    this._log('debug', `Health check for ${providerConfig.uuid} (${providerType}) skipped: Check not implemented.`);
+                    this.resetProviderCounters(providerType, providerConfig);
                     continue;
                 }
-
-                try {
-                    // Perform actual health check based on provider type
-                    const healthResult = await this._checkProviderHealth(providerType, providerConfig);
-                    
-                    if (healthResult === null) {
-                        this._log('debug', `Health check for ${providerConfig.uuid} (${providerType}) skipped: Check not implemented.`);
-                        this.resetProviderCounters(providerType, providerConfig);
-                        continue;
-                    }
-                    
-                    if (healthResult.success) {
-                        if (!providerStatus.config.isHealthy) {
-                            // Provider was unhealthy but is now healthy
-                            // 恢复健康时不重置使用计数，保持原有值
-                            this.markProviderHealthy(providerType, providerConfig, true, healthResult.modelName);
-                            this._log('info', `Health check for ${providerConfig.uuid} (${providerType}): Marked Healthy (actual check)`);
-                        } else {
-                            // Provider was already healthy and still is
-                            // 只在初始化时重置使用计数
-                            this.markProviderHealthy(providerType, providerConfig, true, healthResult.modelName);
-                            this._log('debug', `Health check for ${providerConfig.uuid} (${providerType}): Still Healthy`);
-                        }
+                
+                if (healthResult.success) {
+                    if (!provider.config.isHealthy) {
+                        this.markProviderHealthy(providerType, providerConfig, true, healthResult.modelName);
+                        this._log('info', `Health check for ${providerConfig.uuid} (${providerType}): Marked Healthy (actual check)`);
                     } else {
-                        // Provider is not healthy
-                        this._log('warn', `Health check for ${providerConfig.uuid} (${providerType}) failed: ${healthResult.errorMessage || 'Provider is not responding correctly.'}`);
-                        this.markProviderUnhealthy(providerType, providerConfig, healthResult.errorMessage);
-                        
-                        // 更新健康检测时间和模型（即使失败也记录）
-                        providerStatus.config.lastHealthCheckTime = new Date().toISOString();
-                        if (healthResult.modelName) {
-                            providerStatus.config.lastHealthCheckModel = healthResult.modelName;
-                        }
+                        this.markProviderHealthy(providerType, providerConfig, true, healthResult.modelName);
+                        this._log('debug', `Health check for ${providerConfig.uuid} (${providerType}): Still Healthy`);
                     }
-
-                } catch (error) {
-                    this._log('error', `Health check for ${providerConfig.uuid} (${providerType}) failed: ${error.message}`);
-                    // If a health check fails, mark it unhealthy, which will update error count and lastErrorTime
-                    this.markProviderUnhealthy(providerType, providerConfig, error.message);
+                } else {
+                    this._log('warn', `Health check for ${providerConfig.uuid} (${providerType}) failed: ${healthResult.errorMessage || 'Provider is not responding correctly.'}`);
+                    this.markProviderUnhealthy(providerType, providerConfig, healthResult.errorMessage);
+                    
+                    provider.config.lastHealthCheckTime = new Date().toISOString();
+                    if (healthResult.modelName) {
+                        provider.config.lastHealthCheckModel = healthResult.modelName;
+                    }
                 }
+
+            } catch (error) {
+                this._log('error', `Health check for ${providerConfig.uuid} (${providerType}) failed: ${error.message}`);
+                this.markProviderUnhealthy(providerType, providerConfig, error.message);
             }
         }
     }
@@ -2675,29 +2854,13 @@ export class ProviderPoolManager {
             this._log('info', '[ScheduledHealthCheck] No provider types selected, skipping health check');
             return;
         }
+
+        this._checkAndRecoverScheduledProviders();
         
-        // Count providers to be checked
-        let totalProviders = 0;
-        let providersToCheck = [];
-        
-        for (const providerType in this.providerStatus) {
-            // Only check selected provider types
-            if (!selectedProviderTypes.includes(providerType)) {
-                this._log('debug', `[ScheduledHealthCheck] Skipping provider type ${providerType}: not in selected types`);
-                continue;
-            }
-            
-            for (const provider of this.providerStatus[providerType]) {
-                // Skip manually disabled providers
-                if (provider.config.isDisabled === true) {
-                    this._log('debug', `[ScheduledHealthCheck] Skipping ${provider.config.uuid} (${providerType}): manually disabled`);
-                    continue;
-                }
-                
-                totalProviders++;
-                providersToCheck.push({ providerType, provider, uuid: provider.config.uuid, customName: provider.config.customName });
-            }
-        }
+        const providersToCheck = this._collectProvidersForHealthCheck(selectedProviderTypes, scheduledConfig, {
+            logPrefix: '[ScheduledHealthCheck]'
+        });
+        const totalProviders = providersToCheck.length;
         
         this._log('info', `[ScheduledHealthCheck] Starting scheduled health checks: ${totalProviders} provider(s) to check (interval: ${scheduledConfig.interval}ms, types: ${selectedProviderTypes.join(', ')})`);
         
@@ -2901,6 +3064,223 @@ export class ProviderPoolManager {
         // 所有尝试都失败
         this._log('warn', `[HealthCheck] ${providerType} failed after ${healthCheckRequests.length} attempts: ${lastError?.message}`);
         return { success: false, modelName, errorMessage: lastError?.message || 'All health check attempts failed' };
+    }
+
+    _shouldPersistSessionAffinity() {
+        return this.sessionAffinityConfig.sessionAffinityEnabled
+            && this.sessionAffinityConfig.persistEnabled !== false;
+    }
+
+    _getSessionAffinityPersistFilePath() {
+        if (!this._shouldPersistSessionAffinity()) {
+            return null;
+        }
+
+        const configuredPath = this.sessionAffinityConfig.persistFilePath;
+        if (typeof configuredPath !== 'string' || !configuredPath.trim()) {
+            return null;
+        }
+
+        return path.isAbsolute(configuredPath)
+            ? configuredPath
+            : path.resolve(process.cwd(), configuredPath);
+    }
+
+    _scheduleSessionAffinityPersist() {
+        if (!this._shouldPersistSessionAffinity()) {
+            return;
+        }
+
+        this.sessionAffinityPersistDirty = true;
+        if (this.sessionAffinityPersistTimer) {
+            return;
+        }
+
+        const persistDelay = Math.max(0, Number(this.sessionAffinityConfig.persistDebounceMs) || 0);
+        this.sessionAffinityPersistTimer = setTimeout(() => {
+            this._flushSessionAffinityPersistence();
+        }, persistDelay);
+
+        if (typeof this.sessionAffinityPersistTimer.unref === 'function') {
+            this.sessionAffinityPersistTimer.unref();
+        }
+    }
+
+    async _flushSessionAffinityPersistence() {
+        if (!this.sessionAffinityPersistDirty) {
+            return;
+        }
+
+        const filePath = this._getSessionAffinityPersistFilePath();
+        this.sessionAffinityPersistDirty = false;
+
+        if (this.sessionAffinityPersistTimer) {
+            clearTimeout(this.sessionAffinityPersistTimer);
+            this.sessionAffinityPersistTimer = null;
+        }
+
+        if (!filePath) {
+            return;
+        }
+
+        try {
+            await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+            const payload = {
+                version: 1,
+                savedAt: new Date().toISOString(),
+                sessions: Array.from(this.sessionAffinity.sessions.entries()).map(([sessionKey, session]) => ({
+                    sessionKey,
+                    boundUuid: session?.boundUuid || null,
+                    providerType: session?.providerType || null,
+                    createdAt: Number(session?.createdAt) || Date.now(),
+                    lastAccessed: Number(session?.lastAccessed) || Date.now(),
+                    cooling: session?.cooling instanceof Map
+                        ? Array.from(session.cooling.entries()).map(([uuid, deadline]) => [
+                            uuid,
+                            deadline === Infinity ? 'Infinity' : deadline
+                        ])
+                        : []
+                })),
+                aliases: Array.from(this.sessionResponseAliases.entries())
+            };
+
+            await fs.promises.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
+            this._log('debug', `Session affinity store updated successfully: ${filePath}`);
+        } catch (error) {
+            this._log('error', `Failed to persist session affinity store: ${error.message}`);
+        }
+    }
+
+    _loadPersistedSessionAffinityStore() {
+        const filePath = this._getSessionAffinityPersistFilePath();
+        if (!filePath || !fs.existsSync(filePath)) {
+            return;
+        }
+
+        try {
+            const raw = fs.readFileSync(filePath, 'utf8');
+            if (!raw.trim()) {
+                return;
+            }
+
+            const parsed = JSON.parse(raw);
+            const restoredSessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+            const restoredAliases = Array.isArray(parsed?.aliases) ? parsed.aliases : [];
+
+            this.sessionAffinity.sessions.clear();
+            for (const entry of restoredSessions) {
+                const sessionKey = typeof entry?.sessionKey === 'string' ? entry.sessionKey.trim() : '';
+                const providerType = typeof entry?.providerType === 'string' ? entry.providerType.trim() : '';
+                if (!sessionKey || !providerType) {
+                    continue;
+                }
+
+                const coolingEntries = Array.isArray(entry.cooling) ? entry.cooling : [];
+                const cooling = new Map();
+                for (const [uuid, rawDeadline] of coolingEntries) {
+                    if (typeof uuid !== 'string' || !uuid.trim()) {
+                        continue;
+                    }
+
+                    const deadline = rawDeadline === 'Infinity' ? Infinity : Number(rawDeadline);
+                    if (deadline === Infinity || Number.isFinite(deadline)) {
+                        cooling.set(uuid, deadline);
+                    }
+                }
+
+                this.sessionAffinity.sessions.set(sessionKey, {
+                    boundUuid: typeof entry.boundUuid === 'string' && entry.boundUuid.trim()
+                        ? entry.boundUuid.trim()
+                        : null,
+                    providerType,
+                    createdAt: Number(entry.createdAt) || Date.now(),
+                    lastAccessed: Number(entry.lastAccessed) || Date.now(),
+                    cooling
+                });
+            }
+
+            this.sessionResponseAliases.clear();
+            for (const entry of restoredAliases) {
+                if (!Array.isArray(entry) || entry.length < 2) {
+                    continue;
+                }
+                const [responseId, sessionKey] = entry;
+                if (typeof responseId !== 'string' || typeof sessionKey !== 'string') {
+                    continue;
+                }
+                this.sessionResponseAliases.set(responseId, sessionKey);
+            }
+
+            const changed = this._sanitizeSessionAffinityState();
+            this._log('info', `Loaded session affinity store: ${this.sessionAffinity.size} sessions, ${this.sessionResponseAliases.size} aliases`);
+            if (changed) {
+                this._scheduleSessionAffinityPersist();
+            }
+        } catch (error) {
+            this._log('error', `Failed to load session affinity store: ${error.message}`);
+        }
+    }
+
+    _sanitizeSessionAffinityState() {
+        if (!this.sessionAffinityConfig.sessionAffinityEnabled) {
+            return false;
+        }
+
+        const now = Date.now();
+        let changed = false;
+
+        for (const [sessionKey, session] of this.sessionAffinity.sessions.entries()) {
+            if (!session || typeof session !== 'object') {
+                this.sessionAffinity.sessions.delete(sessionKey);
+                changed = true;
+                continue;
+            }
+
+            if (!session.providerType || !this.providerStatus[session.providerType]) {
+                this.sessionAffinity.sessions.delete(sessionKey);
+                changed = true;
+                continue;
+            }
+
+            if (sessionKey.startsWith('p2:') && (now - (Number(session.lastAccessed) || 0)) > this.sessionAffinityConfig.defaultWeakTtlMs) {
+                this.sessionAffinity.sessions.delete(sessionKey);
+                changed = true;
+                continue;
+            }
+
+            session.createdAt = Number(session.createdAt) || now;
+            session.lastAccessed = Number(session.lastAccessed) || session.createdAt;
+
+            if (!(session.cooling instanceof Map)) {
+                session.cooling = new Map();
+                changed = true;
+            } else {
+                for (const [uuid, deadline] of session.cooling.entries()) {
+                    if (deadline === Infinity) {
+                        continue;
+                    }
+
+                    if (!Number.isFinite(deadline) || deadline <= now) {
+                        session.cooling.delete(uuid);
+                        changed = true;
+                    }
+                }
+            }
+
+            if (session.boundUuid) {
+                const provider = this._findProvider(session.providerType, session.boundUuid);
+                if (!provider
+                    || !provider.config.isHealthy
+                    || provider.config.isDisabled
+                    || provider.config.needsRefresh) {
+                    session.boundUuid = null;
+                    changed = true;
+                }
+            }
+        }
+
+        const removedAliases = this.cleanupExpiredSessionAliases();
+        return changed || removedAliases > 0;
     }
 
     /**
@@ -3132,7 +3512,14 @@ class SessionAffinityMap {
     constructor(options = {}) {
         this.ttlMs = options.defaultWeakTtlMs || 30 * 60 * 1000;
         this.maxSize = options.maxSessions || 10000;
+        this.onDirty = typeof options.onDirty === 'function' ? options.onDirty : null;
         this.sessions = new Map(); // sessionKey => sessionData
+    }
+
+    _markDirty() {
+        if (this.onDirty) {
+            this.onDirty();
+        }
     }
 
     /**
@@ -3188,6 +3575,7 @@ class SessionAffinityMap {
 
         // 更新访问时间
         session.lastAccessed = Date.now();
+        this._markDirty();
         return session;
     }
 
@@ -3199,6 +3587,7 @@ class SessionAffinityMap {
         const session = this.sessions.get(key);
         if (session) {
             session.lastAccessed = Date.now();
+            this._markDirty();
         }
     }
 
@@ -3214,6 +3603,7 @@ class SessionAffinityMap {
         }
 
         this.sessions.set(key, data);
+        this._markDirty();
     }
 
     /**
@@ -3221,7 +3611,10 @@ class SessionAffinityMap {
      * @param {string} key - 会话键
      */
     remove(key) {
-        this.sessions.delete(key);
+        const deleted = this.sessions.delete(key);
+        if (deleted) {
+            this._markDirty();
+        }
     }
 
     /**
@@ -3235,6 +3628,10 @@ class SessionAffinityMap {
 
         for (let i = 0; i < count && i < entries.length; i++) {
             this.sessions.delete(entries[i][0]);
+        }
+
+        if (count > 0) {
+            this._markDirty();
         }
     }
 
@@ -3252,6 +3649,10 @@ class SessionAffinityMap {
                 this.sessions.delete(key);
                 removed++;
             }
+        }
+
+        if (removed > 0) {
+            this._markDirty();
         }
 
         return removed;

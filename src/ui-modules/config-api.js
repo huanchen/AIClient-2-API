@@ -271,9 +271,16 @@ export async function handleUpdateConfig(req, res, currentConfig) {
             // 更新配置
             currentConfig.SCHEDULED_HEALTH_CHECK = {
                 enabled: nowEnabled,
-                startupRun: incoming?.startupRun !== false,
+                startupRun: incoming?.startupRun !== undefined
+                    ? incoming.startupRun !== false
+                    : prevConfig.startupRun !== false,
                 interval: newInterval,
-                providerTypes: Array.isArray(incoming?.providerTypes) ? incoming.providerTypes : []
+                providerTypes: Array.isArray(incoming?.providerTypes)
+                    ? incoming.providerTypes
+                    : (Array.isArray(prevConfig.providerTypes) ? prevConfig.providerTypes : []),
+                checkHealthyProviders: incoming?.checkHealthyProviders !== undefined
+                    ? incoming.checkHealthyProviders === true
+                    : prevConfig.checkHealthyProviders === true
             };
 
             // 处理 timer 状态变化
