@@ -57,8 +57,32 @@ describe('upstream model rewrite', () => {
         await service.generateContent('gpt-5.4', requestBody);
 
         expect(service.callApi).toHaveBeenCalledWith(
-            '/messages',
+            '/v1/messages',
             expect.objectContaining({ model: 'claude-sonnet-4-5' })
+        );
+    });
+
+    test.each([
+        ['https://example.com', 'https://example.com', '/v1/messages'],
+        ['https://example.com/v1', 'https://example.com/v1', '/messages'],
+        ['https://example.com/v1/messages', 'https://example.com/v1', '/messages']
+    ])('Claude custom resolves message endpoint for base URL %s', async (configuredBaseUrl, expectedBaseUrl, expectedUrl) => {
+        const service = new ClaudeApiService({
+            CLAUDE_API_KEY: 'test-key',
+            CLAUDE_BASE_URL: configuredBaseUrl,
+            MODEL_PROVIDER: MODEL_PROVIDER.CLAUDE_CUSTOM
+        });
+        service.client.request = jest.fn().mockResolvedValue({ data: { ok: true } });
+
+        const requestBody = { model: 'claude-opus-4-6', messages: [] };
+        await service.generateContent('claude-opus-4-6', requestBody);
+
+        expect(service.baseUrl).toBe(expectedBaseUrl);
+        expect(service.client.request).toHaveBeenCalledWith(
+            expect.objectContaining({
+                url: expectedUrl,
+                data: expect.objectContaining({ model: 'claude-opus-4-6' })
+            })
         );
     });
 });

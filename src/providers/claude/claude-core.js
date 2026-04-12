@@ -6,6 +6,32 @@ import { configureAxiosProxy, configureTLSSidecar } from '../../utils/proxy-util
 import { isRetryableNetworkError, MODEL_PROVIDER } from '../../utils/common.js';
 import { normalizeRequestedModelForProvider } from '../provider-models.js';
 
+function trimTrailingSlashes(value) {
+    return typeof value === 'string' ? value.trim().replace(/\/+$/, '') : value;
+}
+
+function normalizeClaudeBaseUrl(baseUrl) {
+    const normalizedBaseUrl = trimTrailingSlashes(baseUrl);
+    if (typeof normalizedBaseUrl !== 'string' || !normalizedBaseUrl) {
+        return normalizedBaseUrl;
+    }
+
+    if (normalizedBaseUrl.toLowerCase().endsWith('/v1/messages')) {
+        return normalizedBaseUrl.slice(0, -'/messages'.length);
+    }
+
+    return normalizedBaseUrl;
+}
+
+function resolveClaudeMessagesEndpoint(baseUrl) {
+    const normalizedBaseUrl = normalizeClaudeBaseUrl(baseUrl);
+    if (typeof normalizedBaseUrl !== 'string' || !normalizedBaseUrl) {
+        return '/v1/messages';
+    }
+
+    return normalizedBaseUrl.toLowerCase().endsWith('/v1') ? '/messages' : '/v1/messages';
+}
+
 /**
  * Claude API Core Service Class.
  * Encapsulates the interaction logic with the Anthropic Claude API.
@@ -22,7 +48,8 @@ export class ClaudeApiService {
         }
         this.config = config;
         this.apiKey = config.CLAUDE_API_KEY;
-        this.baseUrl = config.CLAUDE_BASE_URL;
+        this.baseUrl = normalizeClaudeBaseUrl(config.CLAUDE_BASE_URL);
+        this.messagesEndpoint = resolveClaudeMessagesEndpoint(config.CLAUDE_BASE_URL);
         this.useSystemProxy = config?.USE_SYSTEM_PROXY_CLAUDE ?? false;
         logger.info(`[Claude] System proxy ${this.useSystemProxy ? 'enabled' : 'disabled'}`);
         this.client = this.createClient();
@@ -259,7 +286,7 @@ export class ClaudeApiService {
             this.config.supportedModels
         );
         
-        const response = await this.callApi('/messages', requestBody);
+        const response = await this.callApi(this.messagesEndpoint, requestBody);
         return response;
     }
 
@@ -284,7 +311,7 @@ export class ClaudeApiService {
             this.config.supportedModels
         );
 
-        const stream = this.streamApi('/messages', requestBody);
+        const stream = this.streamApi(this.messagesEndpoint, requestBody);
         for await (const chunk of stream) {
             yield chunk;
         }
