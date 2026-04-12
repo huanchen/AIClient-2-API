@@ -19,6 +19,22 @@ import {
     isProviderConfigValidationErrorMessage
 } from '../utils/provider-utils.js';
 
+const PROVIDER_ENDPOINT_IDENTITY_KEYS = [
+    'CLAUDE_BASE_URL',
+    'OPENAI_BASE_URL',
+    'FORWARD_BASE_URL',
+    'GROK_BASE_URL'
+];
+
+function normalizeEndpointIdentity(value) {
+    if (typeof value !== 'string') {
+        return null;
+    }
+
+    const trimmed = value.trim().replace(/\/+$/, '');
+    return trimmed || null;
+}
+
 /**
  * Manages a pool of API service providers, handling their health and selection.
  */
@@ -753,6 +769,45 @@ export class ProviderPoolManager {
         return pool?.find(p => p.uuid === uuid) || null;
     }
 
+    _getProviderEndpointIdentity(providerConfig) {
+        if (!providerConfig || typeof providerConfig !== 'object') {
+            return null;
+        }
+
+        for (const key of PROVIDER_ENDPOINT_IDENTITY_KEYS) {
+            const endpointIdentity = normalizeEndpointIdentity(providerConfig[key]);
+            if (endpointIdentity) {
+                return endpointIdentity;
+            }
+        }
+
+        return null;
+    }
+
+    _matchesProviderSelectionFilters(providerConfig, options = {}) {
+        if (!providerConfig) {
+            return false;
+        }
+
+        if (Array.isArray(options.excludeUuids) && options.excludeUuids.includes(providerConfig.uuid)) {
+            return false;
+        }
+
+        if (Array.isArray(options.excludeEndpointIdentities) && options.excludeEndpointIdentities.length > 0) {
+            const endpointIdentity = this._getProviderEndpointIdentity(providerConfig);
+            if (endpointIdentity && options.excludeEndpointIdentities.includes(endpointIdentity)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    getProviderEndpointIdentity(providerType, uuid) {
+        const provider = this._findProvider(providerType, uuid);
+        return this._getProviderEndpointIdentity(provider?.config);
+    }
+
     /**
      * 根据 UUID 在所有池中查找提供商配置
      * @param {string} uuid - 提供商 UUID
@@ -1267,7 +1322,7 @@ export class ProviderPoolManager {
      * @param {string} sessionKey - 会话键
      * @returns {string|null} 选中的节点UUID，null表示无可用节点
      */
-    selectNodeForSession(providerType, sessionKey) {
+    selectNodeForSession(providerType, sessionKey, options = {}) {
         if (!this.sessionAffinityConfig.sessionAffinityEnabled || !sessionKey) {
             return null;
         }
@@ -1276,7 +1331,8 @@ export class ProviderPoolManager {
         const session = this.sessionAffinity.get(sessionKey);
         const now = Date.now();
         this._pruneSessionCooling(session, now);
-        const healthyNodes = this.getHealthyNodes(providerType);
+        const healthyNodes = this.getHealthyNodes(providerType)
+            .filter(p => this._matchesProviderSelectionFilters(p.config, options));
 
         // 检查是否有已绑定且未冷却的节点
         if (session && session.boundUuid) {
@@ -1513,10 +1569,12 @@ export class ProviderPoolManager {
 
         // 会话粘连：优先使用已绑定的会话节点
         if (this.sessionAffinityConfig.sessionAffinityEnabled && sessionKey) {
-            const sessionSelectedUuid = this.selectNodeForSession(providerType, sessionKey);
+            const sessionSelectedUuid = this.selectNodeForSession(providerType, sessionKey, options);
             if (sessionSelectedUuid) {
                 const selectedProvider = availableProviders.find(p => p.config.uuid === sessionSelectedUuid);
-                if (selectedProvider && selectedProvider.config.isHealthy) {
+                if (selectedProvider
+                    && selectedProvider.config.isHealthy
+                    && this._matchesProviderSelectionFilters(selectedProvider.config, options)) {
                     // 更新选择序列号和最后使用时间
                     this._selectionSequence++;
                     selectedProvider.config._lastSelectionSeq = this._selectionSequence;
@@ -1537,7 +1595,10 @@ export class ProviderPoolManager {
         const minSeq = Math.min(...availableProviders.map(p => p.config._lastSelectionSeq || 0));
 
         let availableAndHealthyProviders = availableProviders.filter(p =>
-            p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh
+            p.config.isHealthy
+            && !p.config.isDisabled
+            && !p.config.needsRefresh
+            && this._matchesProviderSelectionFilters(p.config, options)
         );
 
         // 如果指定了模型，则排除不支持该模型的提供商

@@ -162,6 +162,22 @@ describe('session affinity fixes', () => {
         expect(session.cooling.get('node-a')).toBe(now + 60000);
     });
 
+    test('session affinity excludes nodes sharing the same failed endpoint identity', () => {
+        const manager = createManager([
+            createOpenAiCustomNode({ uuid: 'node-a', OPENAI_BASE_URL: 'https://same.example.com/v1' }),
+            createOpenAiCustomNode({ uuid: 'node-b', OPENAI_BASE_URL: 'https://same.example.com/v1' }),
+            createOpenAiCustomNode({ uuid: 'node-c', OPENAI_BASE_URL: 'https://other.example.com/v1' })
+        ]);
+
+        const selected = manager.selectNodeForSession(providerType, 'p0:avoid-same-endpoint', {
+            excludeEndpointIdentities: ['https://same.example.com/v1']
+        });
+        const session = manager.sessionAffinity.get('p0:avoid-same-endpoint');
+
+        expect(selected).toBe('node-c');
+        expect(session.boundUuid).toBe('node-c');
+    });
+
     test('does not rebind a stale hash-ring node after runtime config becomes invalid', () => {
         const manager = createManager([
             createOpenAiCustomNode({ uuid: 'node-a' })

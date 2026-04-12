@@ -358,6 +358,57 @@ function getPluginHookRequestId(config) {
     return config?._monitorRequestId || config?._pluginRequestId || null;
 }
 
+function normalizeRetryEndpointIdentity(baseUrl) {
+    if (typeof baseUrl !== 'string') {
+        return null;
+    }
+
+    const trimmed = baseUrl.trim().replace(/\/+$/, '');
+    return trimmed || null;
+}
+
+function getRetryEndpointIdentity(providerType, config) {
+    if (!providerType || !config || typeof config !== 'object') {
+        return null;
+    }
+
+    if (providerType === MODEL_PROVIDER.FORWARD || providerType.startsWith(`${MODEL_PROVIDER.FORWARD}-`)) {
+        return normalizeRetryEndpointIdentity(config.FORWARD_BASE_URL);
+    }
+    if (providerType === MODEL_PROVIDER.GROK_CUSTOM || providerType.startsWith(`${MODEL_PROVIDER.GROK_CUSTOM}-`)) {
+        return normalizeRetryEndpointIdentity(config.GROK_BASE_URL);
+    }
+    if (providerType === MODEL_PROVIDER.CLAUDE_CUSTOM || providerType.startsWith(`${MODEL_PROVIDER.CLAUDE_CUSTOM}-`)) {
+        return normalizeRetryEndpointIdentity(config.CLAUDE_BASE_URL);
+    }
+    if (providerType === MODEL_PROVIDER.OPENAI_CUSTOM || providerType.startsWith(`${MODEL_PROVIDER.OPENAI_CUSTOM}-`)) {
+        return normalizeRetryEndpointIdentity(config.OPENAI_BASE_URL);
+    }
+    if (providerType === MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES || providerType.startsWith(`${MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES}-`)) {
+        return normalizeRetryEndpointIdentity(config.OPENAI_BASE_URL);
+    }
+
+    return null;
+}
+
+function shouldAvoidSameEndpointOnRetry(providerType, status) {
+    return typeof status === 'number'
+        && status >= 500
+        && status < 600
+        && (
+            providerType === MODEL_PROVIDER.CLAUDE_CUSTOM
+            || providerType.startsWith(`${MODEL_PROVIDER.CLAUDE_CUSTOM}-`)
+            || providerType === MODEL_PROVIDER.OPENAI_CUSTOM
+            || providerType.startsWith(`${MODEL_PROVIDER.OPENAI_CUSTOM}-`)
+            || providerType === MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES
+            || providerType.startsWith(`${MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES}-`)
+            || providerType === MODEL_PROVIDER.GROK_CUSTOM
+            || providerType.startsWith(`${MODEL_PROVIDER.GROK_CUSTOM}-`)
+            || providerType === MODEL_PROVIDER.FORWARD
+            || providerType.startsWith(`${MODEL_PROVIDER.FORWARD}-`)
+        );
+}
+
 export async function handleStreamRequest(res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext = null) {
     let fullResponseText = '';
     let fullResponseJson = '';
@@ -624,10 +675,22 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             }
             
             try {
+                const excludedEndpointIdentities = Array.isArray(retryContext?.excludedEndpointIdentities)
+                    ? [...retryContext.excludedEndpointIdentities]
+                    : [];
+                if (shouldAvoidSameEndpointOnRetry(toProvider, status) && retryContext?.currentEndpointIdentity) {
+                    excludedEndpointIdentities.push(retryContext.currentEndpointIdentity);
+                }
+                const uniqueExcludedEndpointIdentities = [...new Set(excludedEndpointIdentities.filter(Boolean))];
+
                 // 动态导入以避免循环依赖
                 const { getApiServiceWithFallback } = await import('../services/service-manager.js');
                 // 使用 acquireSlot: true 以占用新凭证的并发插槽
-                const result = await getApiServiceWithFallback(CONFIG, model, { acquireSlot: true, sessionKey });
+                const result = await getApiServiceWithFallback(CONFIG, model, {
+                    acquireSlot: true,
+                    sessionKey,
+                    excludeEndpointIdentities: uniqueExcludedEndpointIdentities
+                });
                 
                 if (result && result.service) {
                     logger.info(`[Stream Retry] Switched to new credential: ${result.uuid} (provider: ${result.actualProviderType})`);
@@ -640,6 +703,11 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                         maxRetries,
                         credentialSwitchRetrySettings,
                         sessionKey,
+                        excludedEndpointIdentities: uniqueExcludedEndpointIdentities,
+                        currentEndpointIdentity: getRetryEndpointIdentity(
+                            result.actualProviderType || toProvider,
+                            result.serviceConfig
+                        ),
                         clientDisconnected,  // 传递断开状态
                         anyDataSent          // 传递数据发送状态
                     };
@@ -841,10 +909,22 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
             }
             
             try {
+                const excludedEndpointIdentities = Array.isArray(retryContext?.excludedEndpointIdentities)
+                    ? [...retryContext.excludedEndpointIdentities]
+                    : [];
+                if (shouldAvoidSameEndpointOnRetry(toProvider, status) && retryContext?.currentEndpointIdentity) {
+                    excludedEndpointIdentities.push(retryContext.currentEndpointIdentity);
+                }
+                const uniqueExcludedEndpointIdentities = [...new Set(excludedEndpointIdentities.filter(Boolean))];
+
                 // 动态导入以避免循环依赖
                 const { getApiServiceWithFallback } = await import('../services/service-manager.js');
                 // 使用 acquireSlot: true 以占用新凭证的并发插槽
-                const result = await getApiServiceWithFallback(CONFIG, model, { acquireSlot: true, sessionKey });
+                const result = await getApiServiceWithFallback(CONFIG, model, {
+                    acquireSlot: true,
+                    sessionKey,
+                    excludeEndpointIdentities: uniqueExcludedEndpointIdentities
+                });
                 
                 if (result && result.service) {
                     logger.info(`[Unary Retry] Switched to new credential: ${result.uuid} (provider: ${result.actualProviderType})`);
@@ -856,7 +936,12 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                         currentRetry: currentRetry + 1,
                         maxRetries,
                         credentialSwitchRetrySettings,
-                        sessionKey
+                        sessionKey,
+                        excludedEndpointIdentities: uniqueExcludedEndpointIdentities,
+                        currentEndpointIdentity: getRetryEndpointIdentity(
+                            result.actualProviderType || toProvider,
+                            result.serviceConfig
+                        )
                     };
                     
                     // 递归调用，使用新的服务
@@ -1088,6 +1173,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     }
 
     let actualCustomName = CONFIG.customName;
+    let actualServiceConfig = CONFIG;
 
     // 2.5. 根据模型选择服务适配器：
     // - service 缺失时（例如上游未预先注入）进行兜底选择
@@ -1102,6 +1188,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
         toProvider = result.actualProviderType;
         actualUuid = result.uuid || pooluuid;
         actualCustomName = result.serviceConfig?.customName || CONFIG.customName;
+        actualServiceConfig = result.serviceConfig || CONFIG;
 
         // 如果发生了模型级别的 fallback，需要更新请求使用的模型
         if (result.actualModel && result.actualModel !== model) {
@@ -1163,7 +1250,9 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
         currentRetry: 0,
         maxRetries: credentialSwitchRetrySettings.maxRetries,
         credentialSwitchRetrySettings,
-        sessionKey
+        sessionKey,
+        excludedEndpointIdentities: [],
+        currentEndpointIdentity: getRetryEndpointIdentity(toProvider, actualServiceConfig)
     };
     
     if (isStream) {
