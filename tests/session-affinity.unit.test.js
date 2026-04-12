@@ -4,7 +4,7 @@ jest.mock('../src/providers/adapter.js', () => ({
     getRegisteredProviders: jest.fn(() => []),
     getServiceAdapter: jest.fn(() => null)
 }));
-import { ProviderPoolManager } from '../src/providers/provider-pool-manager.js';
+import { ConsistentHashRing, ProviderPoolManager } from '../src/providers/provider-pool-manager.js';
 
 const providerType = 'openai-custom';
 const managedInstances = [];
@@ -160,6 +160,29 @@ describe('session affinity fixes', () => {
         expect(selected).toBe('node-b');
         expect(session.boundUuid).toBe('node-b');
         expect(session.cooling.get('node-a')).toBe(now + 60000);
+    });
+
+    test('does not rebind a stale hash-ring node after runtime config becomes invalid', () => {
+        const manager = createManager([
+            createOpenAiCustomNode({ uuid: 'node-a' })
+        ]);
+
+        const provider = manager.providerStatus[providerType].find(p => p.config.uuid === 'node-a').config;
+        delete provider.OPENAI_API_KEY;
+        delete provider.OPENAI_BASE_URL;
+        provider.isHealthy = true;
+        provider.lastErrorMessage = null;
+        manager.consistentHashRings.set(providerType, new ConsistentHashRing(['node-a'], 16));
+
+        seedSession(manager, 'p0:stale-invalid', { boundUuid: 'node-a' });
+
+        const selected = manager.selectNodeForSession(providerType, 'p0:stale-invalid');
+        const session = manager.sessionAffinity.get('p0:stale-invalid');
+
+        expect(selected).toBeNull();
+        expect(session.boundUuid).toBeNull();
+        expect(provider.isHealthy).toBe(false);
+        expect(provider.lastErrorMessage).toBe('[Config Validation] Missing required fields: OPENAI_API_KEY, OPENAI_BASE_URL');
     });
 
     test('rebuilds the ring when scheduled recovery is reached', () => {

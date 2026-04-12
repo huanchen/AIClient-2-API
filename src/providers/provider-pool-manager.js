@@ -568,7 +568,81 @@ export class ProviderPoolManager {
      * 获取指定类型的健康节点数量
      */
     getHealthyCount(providerType) {
+        this._revalidateProviderType(providerType);
         return (this.providerStatus[providerType] || []).filter(p => p.config.isHealthy && !p.config.isDisabled).length;
+    }
+
+    /**
+     * 运行时校验节点配置完整性，避免旧坏节点被会话粘连或哈希环复用
+     * @param {string} providerType
+     * @param {object} providerConfig
+     * @param {object} [options]
+     * @param {boolean} [options.logChanges]
+     * @returns {{ isConfigValid: boolean, changed: boolean }}
+     * @private
+     */
+    _applyProviderConfigValidation(providerType, providerConfig, options = {}) {
+        const { logChanges = true } = options;
+        const validationError = getProviderConfigValidationError(providerType, providerConfig);
+
+        if (validationError) {
+            const changed = providerConfig.isHealthy !== false
+                || providerConfig.lastErrorMessage !== validationError
+                || !providerConfig.lastErrorTime;
+
+            providerConfig.isHealthy = false;
+            providerConfig.lastErrorMessage = validationError;
+            providerConfig.lastErrorTime = providerConfig.lastErrorTime || new Date().toISOString();
+            providerConfig.lastCoolDownDuration = providerConfig.lastCoolDownDuration || 0;
+
+            if (changed && logChanges) {
+                this._log('warn', `Config validation failed for ${providerType}/${providerConfig.uuid}: ${validationError}`);
+            }
+
+            return { isConfigValid: false, changed };
+        }
+
+        if (isProviderConfigValidationErrorMessage(providerConfig.lastErrorMessage)) {
+            providerConfig.lastErrorMessage = null;
+            providerConfig.lastErrorTime = null;
+            providerConfig.lastCoolDownDuration = 0;
+            if (!providerConfig.isDisabled && !providerConfig.scheduledRecoveryTime) {
+                providerConfig.isHealthy = true;
+            }
+            return { isConfigValid: true, changed: true };
+        }
+
+        return { isConfigValid: true, changed: false };
+    }
+
+    /**
+     * 在读请求路径上即时重校验 provider 配置，避免依赖重启迁移旧状态
+     * @param {string} providerType
+     * @returns {boolean}
+     * @private
+     */
+    _revalidateProviderType(providerType) {
+        const providers = this.providerStatus[providerType] || [];
+        if (providers.length === 0) {
+            return false;
+        }
+
+        let changed = false;
+        for (const provider of providers) {
+            const result = this._applyProviderConfigValidation(providerType, provider.config);
+            if (result.changed) {
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            if (this.sessionAffinityConfig.sessionAffinityEnabled) {
+                this._rebuildConsistentHashRing(providerType, providers);
+            }
+            this._debouncedSave(providerType);
+        }
+
+        return changed;
     }
 
     /**
@@ -767,27 +841,7 @@ export class ProviderPoolManager {
                         : (providerConfig.lastCoolDownDuration || 0);
                     providerConfig.customName = providerConfig.customName || null;
 
-                    const configValidationError = getProviderConfigValidationError(providerType, providerConfig);
-                    if (configValidationError) {
-                        const validationChanged = providerConfig.lastErrorMessage !== configValidationError
-                            || providerConfig.isHealthy !== false;
-                        providerConfig.isHealthy = false;
-                        providerConfig.lastErrorMessage = configValidationError;
-                        providerConfig.lastErrorTime = validationChanged
-                            ? new Date().toISOString()
-                            : (providerConfig.lastErrorTime || new Date().toISOString());
-
-                        if (validationChanged) {
-                            this._log('warn', `Config validation failed for ${providerType}/${providerConfig.uuid}: ${configValidationError}`);
-                        }
-                    } else if (isProviderConfigValidationErrorMessage(providerConfig.lastErrorMessage)) {
-                        providerConfig.lastErrorMessage = null;
-                        providerConfig.lastErrorTime = null;
-                        providerConfig.lastCoolDownDuration = 0;
-                        if (!providerConfig.isDisabled && !providerConfig.scheduledRecoveryTime) {
-                            providerConfig.isHealthy = true;
-                        }
-                    }
+                    this._applyProviderConfigValidation(providerType, providerConfig);
 
                     this.providerStatus[providerType].push({
                         config: providerConfig,
@@ -839,8 +893,21 @@ export class ProviderPoolManager {
         if (!this.sessionAffinityConfig.sessionAffinityEnabled) {
             return;
         }
-        const healthyNodes = this.getHealthyNodes(providerType);
-        const nodes = healthyNodes.map(p => p.config.uuid);
+        this._rebuildConsistentHashRing(providerType);
+    }
+
+    /**
+     * 使用当前健康节点快照重建一致性哈希环
+     * @param {string} providerType
+     * @param {Array} [providers]
+     * @private
+     */
+    _rebuildConsistentHashRing(providerType, providers = null) {
+        const providerList = providers || this.providerStatus[providerType] || [];
+        const nodes = providerList
+            .filter(p => p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh && !this.refreshingUuids.has(p.uuid))
+            .map(p => p.config.uuid);
+
         this.consistentHashRings.set(
             providerType,
             new ConsistentHashRing(nodes, this.sessionAffinityConfig.virtualNodesPerNode)
@@ -853,6 +920,7 @@ export class ProviderPoolManager {
      * @returns {Array} 健康节点数组
      */
     getHealthyNodes(providerType) {
+        this._revalidateProviderType(providerType);
         const providers = this.providerStatus[providerType] || [];
         return providers.filter(p =>
             p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh && !this.refreshingUuids.has(p.uuid)
@@ -1204,6 +1272,7 @@ export class ProviderPoolManager {
             return null;
         }
 
+        this._revalidateProviderType(providerType);
         const session = this.sessionAffinity.get(sessionKey);
         const now = Date.now();
         this._pruneSessionCooling(session, now);
@@ -1272,8 +1341,12 @@ export class ProviderPoolManager {
             }
         }
 
+        const canUseSelected = selected
+            && healthyNodes.some(p => p.config.uuid === selected)
+            && !(session?.cooling && session.cooling.has(selected) && session.cooling.get(selected) > now);
+
         // 绑定会话到选中节点
-        if (selected) {
+        if (canUseSelected) {
             const existingSession = session || {};
             this.sessionAffinity.set(sessionKey, {
                 boundUuid: selected,
@@ -1283,6 +1356,8 @@ export class ProviderPoolManager {
                 cooling: existingSession.cooling instanceof Map ? existingSession.cooling : new Map()
             });
             logger.info(`[SessionAffinity] Bound ${providerType} ${this.formatSessionKeyForLog(sessionKey)} to node ${selected}`);
+        } else {
+            selected = null;
         }
 
         return selected;
@@ -1426,6 +1501,7 @@ export class ProviderPoolManager {
      * @private
      */
     _doSelectProvider(providerType, requestedModel, options = {}) {
+        this._revalidateProviderType(providerType);
         const availableProviders = this.providerStatus[providerType] || [];
 
         // 检查并恢复已到恢复时间的提供商
