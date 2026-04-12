@@ -76,10 +76,13 @@ export async function handleGetConfig(req, res, currentConfig) {
         REQUEST_MAX_RETRIES: currentConfig.REQUEST_MAX_RETRIES,
         REQUEST_BASE_DELAY: currentConfig.REQUEST_BASE_DELAY,
         CREDENTIAL_SWITCH_MAX_RETRIES: currentConfig.CREDENTIAL_SWITCH_MAX_RETRIES,
+        CREDENTIAL_SWITCH_RETRY_MIN_DELAY_MS: currentConfig.CREDENTIAL_SWITCH_RETRY_MIN_DELAY_MS,
+        CREDENTIAL_SWITCH_RETRY_MAX_DELAY_MS: currentConfig.CREDENTIAL_SWITCH_RETRY_MAX_DELAY_MS,
         CRON_NEAR_MINUTES: currentConfig.CRON_NEAR_MINUTES,
         CRON_REFRESH_TOKEN: currentConfig.CRON_REFRESH_TOKEN,
         LOGIN_EXPIRY: currentConfig.LOGIN_EXPIRY,
         PROVIDER_POOLS_FILE_PATH: currentConfig.PROVIDER_POOLS_FILE_PATH,
+        PROVIDER_POOL_SAVE_DEBOUNCE_MS: currentConfig.PROVIDER_POOL_SAVE_DEBOUNCE_MS,
         MAX_ERROR_COUNT: currentConfig.MAX_ERROR_COUNT,
         SYSTEM_PROMPT_REPLACEMENTS: currentConfig.SYSTEM_PROMPT_REPLACEMENTS,
         WARMUP_TARGET: currentConfig.WARMUP_TARGET,
@@ -103,6 +106,9 @@ export async function handleGetConfig(req, res, currentConfig) {
         LOG_INCLUDE_TIMESTAMP: currentConfig.LOG_INCLUDE_TIMESTAMP,
         LOG_MAX_FILE_SIZE: currentConfig.LOG_MAX_FILE_SIZE,
         LOG_MAX_FILES: currentConfig.LOG_MAX_FILES,
+        AI_MONITOR_LOG_FULL_PAYLOADS: currentConfig.AI_MONITOR_LOG_FULL_PAYLOADS,
+        AI_MONITOR_MAX_LOG_CHARS: currentConfig.AI_MONITOR_MAX_LOG_CHARS,
+        AI_MONITOR_MAX_CAPTURED_STREAM_CHUNKS: currentConfig.AI_MONITOR_MAX_CAPTURED_STREAM_CHUNKS,
         SCHEDULED_HEALTH_CHECK: currentConfig.SCHEDULED_HEALTH_CHECK,
         sessionAffinity: currentConfig.sessionAffinity,
         // 脱敏：只返回是否设置了 API Key，不返回原文
@@ -175,10 +181,13 @@ export async function handleUpdateConfig(req, res, currentConfig) {
         }
         if (newConfig.REQUEST_BASE_DELAY !== undefined) currentConfig.REQUEST_BASE_DELAY = newConfig.REQUEST_BASE_DELAY;
         if (newConfig.CREDENTIAL_SWITCH_MAX_RETRIES !== undefined) currentConfig.CREDENTIAL_SWITCH_MAX_RETRIES = newConfig.CREDENTIAL_SWITCH_MAX_RETRIES;
+        if (newConfig.CREDENTIAL_SWITCH_RETRY_MIN_DELAY_MS !== undefined) currentConfig.CREDENTIAL_SWITCH_RETRY_MIN_DELAY_MS = newConfig.CREDENTIAL_SWITCH_RETRY_MIN_DELAY_MS;
+        if (newConfig.CREDENTIAL_SWITCH_RETRY_MAX_DELAY_MS !== undefined) currentConfig.CREDENTIAL_SWITCH_RETRY_MAX_DELAY_MS = newConfig.CREDENTIAL_SWITCH_RETRY_MAX_DELAY_MS;
         if (newConfig.CRON_NEAR_MINUTES !== undefined) currentConfig.CRON_NEAR_MINUTES = newConfig.CRON_NEAR_MINUTES;
         if (newConfig.CRON_REFRESH_TOKEN !== undefined) currentConfig.CRON_REFRESH_TOKEN = newConfig.CRON_REFRESH_TOKEN;
         if (newConfig.LOGIN_EXPIRY !== undefined) currentConfig.LOGIN_EXPIRY = newConfig.LOGIN_EXPIRY;
         if (newConfig.PROVIDER_POOLS_FILE_PATH !== undefined) currentConfig.PROVIDER_POOLS_FILE_PATH = newConfig.PROVIDER_POOLS_FILE_PATH;
+        if (newConfig.PROVIDER_POOL_SAVE_DEBOUNCE_MS !== undefined) currentConfig.PROVIDER_POOL_SAVE_DEBOUNCE_MS = newConfig.PROVIDER_POOL_SAVE_DEBOUNCE_MS;
         if (newConfig.MAX_ERROR_COUNT !== undefined) currentConfig.MAX_ERROR_COUNT = newConfig.MAX_ERROR_COUNT;
         if (newConfig.WARMUP_TARGET !== undefined) currentConfig.WARMUP_TARGET = newConfig.WARMUP_TARGET;
         if (newConfig.REFRESH_CONCURRENCY_PER_PROVIDER !== undefined) currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER = newConfig.REFRESH_CONCURRENCY_PER_PROVIDER;
@@ -230,6 +239,9 @@ export async function handleUpdateConfig(req, res, currentConfig) {
         if (newConfig.LOG_INCLUDE_TIMESTAMP !== undefined) currentConfig.LOG_INCLUDE_TIMESTAMP = newConfig.LOG_INCLUDE_TIMESTAMP;
         if (newConfig.LOG_MAX_FILE_SIZE !== undefined) currentConfig.LOG_MAX_FILE_SIZE = newConfig.LOG_MAX_FILE_SIZE;
         if (newConfig.LOG_MAX_FILES !== undefined) currentConfig.LOG_MAX_FILES = newConfig.LOG_MAX_FILES;
+        if (newConfig.AI_MONITOR_LOG_FULL_PAYLOADS !== undefined) currentConfig.AI_MONITOR_LOG_FULL_PAYLOADS = newConfig.AI_MONITOR_LOG_FULL_PAYLOADS;
+        if (newConfig.AI_MONITOR_MAX_LOG_CHARS !== undefined) currentConfig.AI_MONITOR_MAX_LOG_CHARS = newConfig.AI_MONITOR_MAX_LOG_CHARS;
+        if (newConfig.AI_MONITOR_MAX_CAPTURED_STREAM_CHUNKS !== undefined) currentConfig.AI_MONITOR_MAX_CAPTURED_STREAM_CHUNKS = newConfig.AI_MONITOR_MAX_CAPTURED_STREAM_CHUNKS;
 
         // 会话粘连配置
         if (newConfig.sessionAffinity !== undefined) {
@@ -321,10 +333,13 @@ export async function handleUpdateConfig(req, res, currentConfig) {
                 REQUEST_MAX_RETRIES: currentConfig.REQUEST_MAX_RETRIES,
                 REQUEST_BASE_DELAY: currentConfig.REQUEST_BASE_DELAY,
                 CREDENTIAL_SWITCH_MAX_RETRIES: currentConfig.CREDENTIAL_SWITCH_MAX_RETRIES,
+                CREDENTIAL_SWITCH_RETRY_MIN_DELAY_MS: currentConfig.CREDENTIAL_SWITCH_RETRY_MIN_DELAY_MS,
+                CREDENTIAL_SWITCH_RETRY_MAX_DELAY_MS: currentConfig.CREDENTIAL_SWITCH_RETRY_MAX_DELAY_MS,
                 CRON_NEAR_MINUTES: currentConfig.CRON_NEAR_MINUTES,
                 CRON_REFRESH_TOKEN: currentConfig.CRON_REFRESH_TOKEN,
                 LOGIN_EXPIRY: currentConfig.LOGIN_EXPIRY,
                 PROVIDER_POOLS_FILE_PATH: currentConfig.PROVIDER_POOLS_FILE_PATH,
+                PROVIDER_POOL_SAVE_DEBOUNCE_MS: currentConfig.PROVIDER_POOL_SAVE_DEBOUNCE_MS,
                 MAX_ERROR_COUNT: currentConfig.MAX_ERROR_COUNT,
                 WARMUP_TARGET: currentConfig.WARMUP_TARGET,
                 REFRESH_CONCURRENCY_PER_PROVIDER: currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER,
@@ -341,6 +356,9 @@ export async function handleUpdateConfig(req, res, currentConfig) {
                 LOG_INCLUDE_TIMESTAMP: currentConfig.LOG_INCLUDE_TIMESTAMP,
                 LOG_MAX_FILE_SIZE: currentConfig.LOG_MAX_FILE_SIZE,
                 LOG_MAX_FILES: currentConfig.LOG_MAX_FILES,
+                AI_MONITOR_LOG_FULL_PAYLOADS: currentConfig.AI_MONITOR_LOG_FULL_PAYLOADS,
+                AI_MONITOR_MAX_LOG_CHARS: currentConfig.AI_MONITOR_MAX_LOG_CHARS,
+                AI_MONITOR_MAX_CAPTURED_STREAM_CHUNKS: currentConfig.AI_MONITOR_MAX_CAPTURED_STREAM_CHUNKS,
                 TLS_SIDECAR_ENABLED: currentConfig.TLS_SIDECAR_ENABLED,
                 TLS_SIDECAR_ENABLED_PROVIDERS: currentConfig.TLS_SIDECAR_ENABLED_PROVIDERS,
                 TLS_SIDECAR_PORT: currentConfig.TLS_SIDECAR_PORT,

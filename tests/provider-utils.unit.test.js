@@ -23,13 +23,31 @@ describe('provider-utils identity helpers', () => {
         expect(identity.fileLabel).toBe('account.json');
     });
 
-    test('falls back to file name when credential payload has no identity fields', () => {
+    test('keeps account identifier empty when credential payload has no identity fields', () => {
         const identity = extractIdentityFromCredentialsData({}, 'configs/codex/anonymous.json');
 
-        expect(identity.accountIdentifier).toBe('anonymous.json');
+        expect(identity.accountIdentifier).toBeNull();
+        expect(identity.displayIdentifier).toBe('anonymous.json');
         expect(identity.email).toBeNull();
         expect(identity.accountId).toBeNull();
         expect(identity.accountName).toBeNull();
+    });
+
+    test('extracts Google identity from id_token payloads', () => {
+        const payload = Buffer.from(JSON.stringify({
+            email: 'demo@gmail.com',
+            name: 'Demo User',
+            sub: 'google-user-123'
+        })).toString('base64url');
+        const identity = extractIdentityFromCredentialsData({
+            id_token: `header.${payload}.signature`
+        }, 'configs/antigravity/demo.json');
+
+        expect(identity.accountIdentifier).toBe('demo@gmail.com');
+        expect(identity.displayIdentifier).toBe('demo@gmail.com');
+        expect(identity.email).toBe('demo@gmail.com');
+        expect(identity.accountName).toBe('Demo User');
+        expect(identity.accountId).toBe('google-user-123');
     });
 
     test('applies customName when creating provider configs', () => {

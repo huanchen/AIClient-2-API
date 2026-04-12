@@ -51,6 +51,70 @@ export const API_ACTIONS = {
     STREAM_GENERATE_CONTENT: 'streamGenerateContent',
 };
 
+const DEFAULT_CREDENTIAL_SWITCH_MAX_RETRIES = 5;
+const DEFAULT_CREDENTIAL_SWITCH_RETRY_MIN_DELAY_MS = 100;
+const DEFAULT_CREDENTIAL_SWITCH_RETRY_MAX_DELAY_MS = 800;
+const MAX_CREDENTIAL_SWITCH_RETRY_DELAY_MS = 30000;
+
+function normalizeIntegerConfig(value, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+        return fallback;
+    }
+
+    return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
+export function getCredentialSwitchRetrySettings(config = {}) {
+    const maxRetries = normalizeIntegerConfig(
+        config.CREDENTIAL_SWITCH_MAX_RETRIES,
+        DEFAULT_CREDENTIAL_SWITCH_MAX_RETRIES,
+        0,
+        20
+    );
+
+    const minDelayMs = normalizeIntegerConfig(
+        config.CREDENTIAL_SWITCH_RETRY_MIN_DELAY_MS,
+        DEFAULT_CREDENTIAL_SWITCH_RETRY_MIN_DELAY_MS,
+        0,
+        MAX_CREDENTIAL_SWITCH_RETRY_DELAY_MS
+    );
+
+    const maxDelayMs = normalizeIntegerConfig(
+        config.CREDENTIAL_SWITCH_RETRY_MAX_DELAY_MS,
+        DEFAULT_CREDENTIAL_SWITCH_RETRY_MAX_DELAY_MS,
+        0,
+        MAX_CREDENTIAL_SWITCH_RETRY_DELAY_MS
+    );
+
+    return {
+        maxRetries,
+        minDelayMs: Math.min(minDelayMs, maxDelayMs),
+        maxDelayMs: Math.max(minDelayMs, maxDelayMs)
+    };
+}
+
+export function getCredentialSwitchRetryDelayMs(retrySettings = {}) {
+    const minDelayMs = normalizeIntegerConfig(
+        retrySettings.minDelayMs,
+        DEFAULT_CREDENTIAL_SWITCH_RETRY_MIN_DELAY_MS,
+        0,
+        MAX_CREDENTIAL_SWITCH_RETRY_DELAY_MS
+    );
+    const maxDelayMs = normalizeIntegerConfig(
+        retrySettings.maxDelayMs,
+        DEFAULT_CREDENTIAL_SWITCH_RETRY_MAX_DELAY_MS,
+        0,
+        MAX_CREDENTIAL_SWITCH_RETRY_DELAY_MS
+    );
+
+    if (maxDelayMs <= minDelayMs) {
+        return minDelayMs;
+    }
+
+    return minDelayMs + Math.floor(Math.random() * (maxDelayMs - minDelayMs + 1));
+}
+
 import {
     usesManagedModelList,
     getConfiguredSupportedModels,
@@ -302,8 +366,10 @@ export async function handleStreamRequest(res, service, model, requestBody, from
     let anyDataSent = retryContext?.anyDataSent || false; // 跟踪是否已向客户端发送过任何数据
     
     // 重试上下文：包含 CONFIG 和重试计数
+    const credentialSwitchRetrySettings = retryContext?.credentialSwitchRetrySettings
+        ?? getCredentialSwitchRetrySettings(retryContext?.CONFIG);
     // maxRetries: 凭证切换最大次数（跨凭证），默认 5 次
-    const maxRetries = retryContext?.maxRetries ?? 5;
+    const maxRetries = retryContext?.maxRetries ?? credentialSwitchRetrySettings.maxRetries;
     const currentRetry = retryContext?.currentRetry ?? 0;
     const CONFIG = retryContext?.CONFIG;
     const sessionKey = retryContext?.sessionKey ?? null;
@@ -549,10 +615,13 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         // 凭证已被标记为不健康后，尝试切换到新凭证重试
         // 不再依赖状态码判断，只要凭证被标记不健康且可以重试，就尝试切换
         if (credentialMarkedUnhealthy && currentRetry < maxRetries && providerPoolManager && CONFIG) {
-            // 增加10秒内的随机等待时间，避免所有请求同时切换凭证
-            const randomDelay = Math.floor(Math.random() * 10000); // 0-10000毫秒
-            logger.info(`[Stream Retry] Credential marked unhealthy. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries} with different credential...`);
-            await new Promise(resolve => setTimeout(resolve, randomDelay));
+            const randomDelay = getCredentialSwitchRetryDelayMs(credentialSwitchRetrySettings);
+            if (randomDelay > 0) {
+                logger.info(`[Stream Retry] Credential marked unhealthy. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries} with different credential...`);
+                await new Promise(resolve => setTimeout(resolve, randomDelay));
+            } else {
+                logger.info(`[Stream Retry] Credential marked unhealthy. Retrying immediately (${currentRetry + 1}/${maxRetries}) with different credential...`);
+            }
             
             try {
                 // 动态导入以避免循环依赖
@@ -569,6 +638,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
                         CONFIG,
                         currentRetry: currentRetry + 1,
                         maxRetries,
+                        credentialSwitchRetrySettings,
                         sessionKey,
                         clientDisconnected,  // 传递断开状态
                         anyDataSent          // 传递数据发送状态
@@ -666,8 +736,10 @@ export async function handleStreamRequest(res, service, model, requestBody, from
 
 export async function handleUnaryRequest(res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext = null) {
     // 重试上下文：包含 CONFIG 和重试计数
+    const credentialSwitchRetrySettings = retryContext?.credentialSwitchRetrySettings
+        ?? getCredentialSwitchRetrySettings(retryContext?.CONFIG);
     // maxRetries: 凭证切换最大次数（跨凭证），默认 5 次
-    const maxRetries = retryContext?.maxRetries ?? 5;
+    const maxRetries = retryContext?.maxRetries ?? credentialSwitchRetrySettings.maxRetries;
     const currentRetry = retryContext?.currentRetry ?? 0;
     const CONFIG = retryContext?.CONFIG;
     const sessionKey = retryContext?.sessionKey ?? null;
@@ -760,10 +832,13 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         // 凭证已被标记为不健康后，尝试切换到新凭证重试
         // 不再依赖状态码判断，只要凭证被标记不健康且可以重试，就尝试切换
         if (credentialMarkedUnhealthy && currentRetry < maxRetries && providerPoolManager && CONFIG) {
-            // 增加10秒内的随机等待时间，避免所有请求同时切换凭证
-            const randomDelay = Math.floor(Math.random() * 10000); // 0-10000毫秒
-            logger.info(`[Unary Retry] Credential marked unhealthy. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries} with different credential...`);
-            await new Promise(resolve => setTimeout(resolve, randomDelay));
+            const randomDelay = getCredentialSwitchRetryDelayMs(credentialSwitchRetrySettings);
+            if (randomDelay > 0) {
+                logger.info(`[Unary Retry] Credential marked unhealthy. Waiting ${randomDelay}ms before retry ${currentRetry + 1}/${maxRetries} with different credential...`);
+                await new Promise(resolve => setTimeout(resolve, randomDelay));
+            } else {
+                logger.info(`[Unary Retry] Credential marked unhealthy. Retrying immediately (${currentRetry + 1}/${maxRetries}) with different credential...`);
+            }
             
             try {
                 // 动态导入以避免循环依赖
@@ -780,6 +855,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
                         CONFIG,
                         currentRetry: currentRetry + 1,
                         maxRetries,
+                        credentialSwitchRetrySettings,
                         sessionKey
                     };
                     
@@ -1081,8 +1157,14 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     // - 底层重试：同一凭证遇到 429/5xx 时的重试
     // - 凭证切换重试：凭证被标记不健康后切换到其他凭证
     // 当没有不同的健康凭证可用时，重试会自动停止
-    const credentialSwitchMaxRetries = CONFIG.CREDENTIAL_SWITCH_MAX_RETRIES || 5;
-    const retryContext = { CONFIG, currentRetry: 0, maxRetries: credentialSwitchMaxRetries, sessionKey };
+    const credentialSwitchRetrySettings = getCredentialSwitchRetrySettings(CONFIG);
+    const retryContext = {
+        CONFIG,
+        currentRetry: 0,
+        maxRetries: credentialSwitchRetrySettings.maxRetries,
+        credentialSwitchRetrySettings,
+        sessionKey
+    };
     
     if (isStream) {
         await handleStreamRequest(res, service, model, processedRequestBody, fromProvider, toProvider, CONFIG.PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, actualUuid, actualCustomName, retryContext);

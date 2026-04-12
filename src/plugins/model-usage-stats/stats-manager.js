@@ -142,7 +142,7 @@ function syncWriteToFile() {
             mkdirSync(dir, { recursive: true });
         }
         writeFileSync(STATS_STORE_FILE, JSON.stringify(statsStore, null, 2), 'utf8');
-        logger.info('[Model Usage Stats] Sync persisted stats store');
+        logger.debug('[Model Usage Stats] Sync persisted stats store');
     } catch (error) {
         logger.error('[Model Usage Stats] Sync write failed:', error.message);
     }
@@ -174,7 +174,7 @@ async function persistIfDirty() {
 
                 if (mutationVersion === versionAtStart) {
                     isDirty = false;
-                    logger.info(`[Model Usage Stats] Persisted stats store: version=${versionAtStart}, requests=${statsStore.summary.requestCount}, totalTokens=${statsStore.summary.totalTokens}`);
+                    logger.debug(`[Model Usage Stats] Persisted stats store: version=${versionAtStart}, requests=${statsStore.summary.requestCount}, totalTokens=${statsStore.summary.totalTokens}`);
                 }
             }
         } catch (error) {

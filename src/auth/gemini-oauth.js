@@ -8,6 +8,7 @@ import { broadcastEvent } from '../services/ui-manager.js';
 import { autoLinkProviderConfigs } from '../services/service-manager.js';
 import { CONFIG } from '../core/config-manager.js';
 import { getGoogleAuthProxyConfig } from '../utils/proxy-utils.js';
+import { decodeJwtPayload } from '../utils/provider-utils.js';
 
 /**
  * OAuth 提供商配置
@@ -19,7 +20,7 @@ const OAUTH_PROVIDERS = {
         port: 8085,
         credentialsDir: '.gemini',
         credentialsFile: 'oauth_creds.json',
-        scope: ['https://www.googleapis.com/auth/cloud-platform'],
+        scope: ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/cloud-platform'],
         logPrefix: '[Gemini Auth]'
     },
     'gemini-antigravity': {
@@ -28,10 +29,49 @@ const OAUTH_PROVIDERS = {
         port: 8086,
         credentialsDir: '.antigravity',
         credentialsFile: 'oauth_creds.json',
-        scope: ['https://www.googleapis.com/auth/cloud-platform'],
+        scope: ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/cloud-platform'],
         logPrefix: '[Antigravity Auth]'
     }
 };
+
+async function enrichGoogleTokensWithIdentity(authClient, tokens, logPrefix) {
+    const enrichedTokens = { ...tokens };
+    const decodedIdToken = decodeJwtPayload(tokens?.id_token || tokens?.idToken);
+
+    if (decodedIdToken.email && !enrichedTokens.email) {
+        enrichedTokens.email = decodedIdToken.email;
+    }
+    if (decodedIdToken.name && !enrichedTokens.name) {
+        enrichedTokens.name = decodedIdToken.name;
+    }
+    if (decodedIdToken.sub && !enrichedTokens.sub) {
+        enrichedTokens.sub = decodedIdToken.sub;
+    }
+
+    if ((!enrichedTokens.email || !enrichedTokens.name || !enrichedTokens.sub) && tokens?.access_token) {
+        try {
+            authClient.setCredentials(tokens);
+            const response = await authClient.request({
+                url: 'https://openidconnect.googleapis.com/v1/userinfo'
+            });
+            const userInfo = response?.data || {};
+
+            if (userInfo.email && !enrichedTokens.email) {
+                enrichedTokens.email = userInfo.email;
+            }
+            if (userInfo.name && !enrichedTokens.name) {
+                enrichedTokens.name = userInfo.name;
+            }
+            if (userInfo.sub && !enrichedTokens.sub) {
+                enrichedTokens.sub = userInfo.sub;
+            }
+        } catch (error) {
+            logger.debug?.(`${logPrefix} 获取用户身份信息失败: ${error.message}`);
+        }
+    }
+
+    return enrichedTokens;
+}
 
 /**
  * 活动的服务器实例管理
@@ -203,6 +243,7 @@ async function createOAuthCallbackServer(config, redirectUri, authClient, credPa
                     
                     try {
                         const { tokens } = await authClient.getToken(code);
+                        const enrichedTokens = await enrichGoogleTokensWithIdentity(authClient, tokens, config.logPrefix);
                         let finalCredPath = credPath;
                         
                         // 如果指定了保存到 configs 目录
@@ -216,8 +257,11 @@ async function createOAuthCallbackServer(config, redirectUri, authClient, credPa
                         }
 
                         await fs.promises.mkdir(path.dirname(finalCredPath), { recursive: true });
-                        await fs.promises.writeFile(finalCredPath, JSON.stringify(tokens, null, 2));
+                        await fs.promises.writeFile(finalCredPath, JSON.stringify(enrichedTokens, null, 2));
                         logger.info(`${config.logPrefix} 新令牌已接收并保存到文件: ${finalCredPath}`);
+                        if (enrichedTokens.email || enrichedTokens.name) {
+                            logger.info(`${config.logPrefix} 已识别账号: ${enrichedTokens.email || enrichedTokens.name}`);
+                        }
                         
                         const relativePath = path.relative(process.cwd(), finalCredPath);
 

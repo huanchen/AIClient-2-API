@@ -69,6 +69,8 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         REQUEST_MAX_RETRIES: 3,
         REQUEST_BASE_DELAY: 1000,
         CREDENTIAL_SWITCH_MAX_RETRIES: 5, // 坏凭证切换最大重试次数（用于认证错误后切换凭证）
+        CREDENTIAL_SWITCH_RETRY_MIN_DELAY_MS: 100, // 坏凭证切换前的最小退避时间
+        CREDENTIAL_SWITCH_RETRY_MAX_DELAY_MS: 800, // 坏凭证切换前的最大退避时间
         CRON_NEAR_MINUTES: 15,
         CRON_REFRESH_TOKEN: false,
         LOGIN_EXPIRY: 3600, // 登录过期时间（秒），默认1小时
@@ -76,6 +78,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         LOGIN_LOCKOUT_DURATION: 1800, // 锁定持续时间（秒），默认30分钟
         LOGIN_MIN_INTERVAL: 5000, // 两次尝试之间的最小间隔（毫秒），默认1秒
         PROVIDER_POOLS_FILE_PATH: null, // 新增号池配置文件路径
+        PROVIDER_POOL_SAVE_DEBOUNCE_MS: 3000, // 号池状态写盘防抖时间
         MAX_ERROR_COUNT: 10, // 提供商最大错误次数
         SYSTEM_PROMPT_REPLACEMENTS: [], // 系统提示词内容替换规则，例如: [{"old": "AI", "new": "Bot"}, {"old": "OpenAI", "new": "Gemini"}]
         SCHEDULED_HEALTH_CHECK: {
@@ -93,6 +96,9 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         LOG_INCLUDE_TIMESTAMP: true,
         LOG_MAX_FILE_SIZE: 10485760,
         LOG_MAX_FILES: 10,
+        AI_MONITOR_LOG_FULL_PAYLOADS: false,
+        AI_MONITOR_MAX_LOG_CHARS: 4000,
+        AI_MONITOR_MAX_CAPTURED_STREAM_CHUNKS: 40,
         TLS_SIDECAR_ENABLED: false, // 启用 Go uTLS sidecar（需要编译 tls-sidecar 二进制）
         TLS_SIDECAR_ENABLED_PROVIDERS: [], // 启用 TLS Sidecar 的提供商列表
         TLS_SIDECAR_PORT: 9090,     // sidecar 监听端口

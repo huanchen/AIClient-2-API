@@ -368,6 +368,7 @@ export function extractIdentityFromCredentialsData(credentials = {}, filePath = 
     const fileLabel = filePath ? path.basename(filePath) : '';
     const nestedOpenAIAuth = credentials['https://api.openai.com/auth'] || {};
     const nestedOpenAIProfile = credentials['https://api.openai.com/profile'] || {};
+    const idTokenClaims = decodeJwtPayload(credentials.id_token || credentials.idToken);
 
     const email = credentials.email
         || credentials.mail
@@ -375,6 +376,7 @@ export function extractIdentityFromCredentialsData(credentials = {}, filePath = 
         || credentials?.profile?.email
         || credentials?.data?.email
         || nestedOpenAIProfile.email
+        || idTokenClaims.email
         || null;
 
     const phone = credentials.phone
@@ -387,12 +389,14 @@ export function extractIdentityFromCredentialsData(credentials = {}, filePath = 
         || credentials?.user?.name
         || credentials?.profile?.name
         || nestedOpenAIProfile.name
+        || idTokenClaims.name
         || null;
 
     const accountId = credentials.account_id
         || credentials.accountId
         || credentials.user_id
         || credentials.sub
+        || idTokenClaims.sub
         || nestedOpenAIAuth.chatgpt_account_id
         || null;
 
@@ -408,10 +412,12 @@ export function extractIdentityFromCredentialsData(credentials = {}, filePath = 
         providerLabel = [credentials.provider, credentials.authMethod].filter(Boolean).join(':');
     }
 
-    const accountIdentifier = email || phone || accountName || accountId || providerLabel || fileLabel || null;
+    const accountIdentifier = email || phone || accountName || accountId || providerLabel || null;
+    const displayIdentifier = accountIdentifier || fileLabel || null;
 
     return {
         accountIdentifier,
+        displayIdentifier,
         email,
         phone,
         accountId,
@@ -433,6 +439,24 @@ export async function deriveProviderIdentityFromFile(filePath) {
     } catch (error) {
         logger.debug?.(`[Provider Utils] Failed to derive provider identity from ${filePath}: ${error.message}`);
         return extractIdentityFromCredentialsData({}, filePath);
+    }
+}
+
+export function decodeJwtPayload(token) {
+    if (!token || typeof token !== 'string') {
+        return {};
+    }
+
+    const segments = token.split('.');
+    if (segments.length < 2) {
+        return {};
+    }
+
+    try {
+        return JSON.parse(Buffer.from(segments[1], 'base64url').toString('utf8'));
+    } catch (error) {
+        logger.debug?.(`[Provider Utils] Failed to decode JWT payload: ${error.message}`);
+        return {};
     }
 }
 

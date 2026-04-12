@@ -58,7 +58,9 @@ export class ProviderPoolManager {
         this.logLevel = options.logLevel || 'info'; // 'debug', 'info', 'warn', 'error'
         
         // 添加防抖机制，避免频繁的文件 I/O 操作
-        this.saveDebounceTime = options.saveDebounceTime || 1000; // 默认1秒防抖
+        this.saveDebounceTime = options.saveDebounceTime
+            ?? options.globalConfig?.PROVIDER_POOL_SAVE_DEBOUNCE_MS
+            ?? 3000; // 默认3秒防抖
         this.saveTimer = null;
         this.pendingSaves = new Set(); // 记录待保存的 providerType
         
@@ -2771,7 +2773,7 @@ export class ProviderPoolManager {
             
             // 一次性写入文件
             await fs.promises.writeFile(filePath, JSON.stringify(currentPools, null, 2), 'utf8');
-            this._log('info', `configs/provider_pools.json updated successfully for types: ${typesToSave.join(', ')}`);
+            this._log('debug', `configs/provider_pools.json updated successfully for types: ${typesToSave.join(', ')}`);
         } catch (error) {
             this._log('error', `Failed to write provider_pools.json: ${error.message}`);
         }

@@ -279,6 +279,11 @@ export async function initApiService(config, isReady = false) {
     // Initialize or update ProviderPoolManager
     if (providerPoolManager) {
         providerPoolManager.providerPools = config.providerPools || {};
+        providerPoolManager.globalConfig = config;
+        providerPoolManager.fallbackChain = config.providerFallbackChain || {};
+        providerPoolManager.modelFallbackMapping = config.modelFallbackMapping || {};
+        providerPoolManager.logLevel = config.LOG_LEVEL || providerPoolManager.logLevel;
+        providerPoolManager.saveDebounceTime = config.PROVIDER_POOL_SAVE_DEBOUNCE_MS ?? providerPoolManager.saveDebounceTime;
         providerPoolManager.initializeProviderStatus();
         logger.info('[Initialization] ProviderPoolManager existing instance updated.');
     } else {

@@ -138,9 +138,17 @@ function buildProviderAccountIdentity(providerType, provider) {
         logger.debug?.(`[UI API] Failed to extract account identity from ${rawCredPath}: ${error.message}`);
     }
 
+    const hydratedCustomName = (
+        (!provider.customName || provider.customName === fileLabel)
+        && identity.accountIdentifier
+    )
+        ? identity.accountIdentifier
+        : provider.customName;
+
     return {
         ...provider,
-        accountIdentifier: identity.accountIdentifier || fileLabel,
+        customName: hydratedCustomName,
+        accountIdentifier: identity.displayIdentifier || fileLabel,
         accountEmail: identity.email || null,
         accountId: identity.accountId || null,
         accountName: identity.accountName || null,
