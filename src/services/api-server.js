@@ -7,6 +7,7 @@ import { initializeAPIManagement } from './api-manager.js';
 import { createRequestHandler } from '../handlers/request-handler.js';
 import { discoverPlugins, getPluginManager } from '../core/plugin-manager.js';
 import { getTLSSidecar } from '../utils/tls-sidecar.js';
+import { shouldRecoverProviderPoolsOnStartup } from '../utils/provider-pool-recovery.js';
 import { HEALTH_CHECK } from '../utils/constants.js';
 
 /**
@@ -246,8 +247,10 @@ async function startServer() {
     await initializeConfig(process.argv.slice(2), 'configs/config.json');
     
     // 自动关联 configs 目录中的配置文件到对应的提供商
-    // logger.info('[Initialization] Checking for unlinked provider configs...');
-    // await autoLinkProviderConfigs(CONFIG);
+    if (shouldRecoverProviderPoolsOnStartup(CONFIG)) {
+        logger.info('[Initialization] Provider pools file is missing or empty. Recovering provider pools from configs directory...');
+        await autoLinkProviderConfigs(CONFIG);
+    }
 
     // Start TLS sidecar if enabled
     if (CONFIG.TLS_SIDECAR_ENABLED) {

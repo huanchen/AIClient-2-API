@@ -49,6 +49,7 @@ describe('provider-models helpers', () => {
         expect(normalizeRequestedModelForProtocol('claude', 'opus')).toBe('claude-opus-4-6');
         expect(normalizeRequestedModelForProtocol('claude', 'Haiku')).toBe('claude-haiku-4-5');
         expect(normalizeRequestedModelForProtocol('claude', 'claude-sonnet-4.6')).toBe('claude-sonnet-4-6');
+        expect(normalizeRequestedModelForProtocol('claude', 'claude-haiku-4-5-20251001')).toBe('claude-haiku-4-5-20251001');
     });
 
     test('normalizes Codex client aliases at protocol level', () => {
@@ -121,6 +122,10 @@ describe('provider-models helpers', () => {
             .toBe('claude-sonnet-4-6');
         expect(normalizeRequestedModelForProvider('claude-custom', 'claude-sonnet-4-20250514'))
             .toBe('claude-sonnet-4-20250514');
+        expect(normalizeRequestedModelForProvider('claude-custom', 'claude-haiku-4-5-20251001'))
+            .toBe('claude-haiku-4-5-20251001');
+        expect(normalizeRequestedModelForProvider('claude-kiro-oauth', 'claude-haiku-4-5-20251001'))
+            .toBe('claude-haiku-4-5');
         expect(normalizeRequestedModelForProvider('grok-custom', 'gpt-5.4'))
             .toBe('grok-4.20');
         expect(normalizeRequestedModelForProvider('grok-custom', 'claude-sonnet-4-6'))

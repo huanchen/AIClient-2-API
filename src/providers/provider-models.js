@@ -338,6 +338,10 @@ function normalizeAliasLookupKey(model) {
         .trim();
 }
 
+function isExplicitClaudeVersionedModel(model) {
+    return typeof model === 'string' && /^claude-[a-z0-9.-]+-\d{8}$/i.test(model.trim());
+}
+
 function createAliasLookup(aliasMap) {
     return Object.entries(aliasMap).reduce((lookup, [canonicalModel, aliases]) => {
         const uniqueAliases = new Set([canonicalModel, ...(aliases || [])]);
@@ -559,6 +563,9 @@ export function normalizeRequestedModelForProtocol(protocol, model) {
 
     switch (protocol) {
         case MODEL_PROTOCOL_PREFIX.CLAUDE:
+            if (isExplicitClaudeVersionedModel(normalizedModel)) {
+                return normalizedModel;
+            }
             return normalizeClaudeProtocolModel(normalizedModel);
         case MODEL_PROTOCOL_PREFIX.OPENAI:
         case MODEL_PROTOCOL_PREFIX.OPENAI_RESPONSES:
